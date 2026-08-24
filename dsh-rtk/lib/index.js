@@ -17,14 +17,18 @@
  *
  * @module dsh-rtk
  */
-import { readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import z from "schemastery";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const BACKUP_DIR = join(here, ".backup");
+// Keep runtime backups out of the installed package directory. This avoids
+// mutating package-manager-owned files and keeps recovered upstream source in
+// the user's private DSH state directory instead.
+const BACKUP_DIR = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".dsh"), "dsh-rtk");
 
 /** Schemastery schema for plugin configuration. */
 const Config = z.object({
@@ -77,7 +81,9 @@ const EDITS = [
 			'\t// Per-command opt-out: "DSH_RTK_DISABLE=1 <cmd>" (anywhere in the command,\n' +
 			'\t// e.g. after "&&") runs the whole command unfiltered.\n' +
 			"\tif (/(^|[\\s;&|])DSH_RTK_DISABLE\\s*=\\s*1\\b/.test(command)) return command;\n" +
-			'\tconst candidates = [process.env.RTK_BIN, "/opt/homebrew/bin/rtk", "/usr/local/bin/rtk", "rtk"].filter((bin) => bin !== void 0 && bin.length > 0);\n' +
+			'\t// Use only an explicit RTK_BIN path. This avoids executing an unexpected\n' +
+			'\t// PATH-resolved binary in the DSH service process.\n' +
+			'\tconst candidates = [process.env.RTK_BIN].filter((bin) => bin !== void 0 && bin.length > 0);\n' +
 			"\tfor (const bin of candidates) {\n" +
 			"\t\tlet result;\n" +
 			"\t\ttry {\n" +
@@ -150,7 +156,9 @@ const PERSISTENT_EDITS = [
 			'\t// Per-command opt-out: "DSH_RTK_DISABLE=1 <cmd>" (anywhere in the command,\n' +
 			'\t// e.g. after "&&") runs the whole command unfiltered.\n' +
 			"\tif (/(^|[\\s;&|])DSH_RTK_DISABLE\\s*=\\s*1\\b/.test(command)) return command;\n" +
-			'\tconst candidates = [process.env.RTK_BIN, "/opt/homebrew/bin/rtk", "/usr/local/bin/rtk", "rtk"].filter((bin) => bin !== void 0 && bin.length > 0);\n' +
+			'\t// Use only an explicit RTK_BIN path. This avoids executing an unexpected\n' +
+			'\t// PATH-resolved binary in the DSH service process.\n' +
+			'\tconst candidates = [process.env.RTK_BIN].filter((bin) => bin !== void 0 && bin.length > 0);\n' +
 			"\tfor (const bin of candidates) {\n" +
 			"\t\tlet result;\n" +
 			"\t\ttry {\n" +
@@ -192,8 +200,9 @@ const TARGETS = [
 // Candidate install locations for @deepseek-ai/dsh (first existing wins).
 function findDshRoot() {
 	const candidates = [
-		process.env.DSH_HOME && join(process.env.DSH_HOME, "..", "lib", "node_modules", "@deepseek-ai", "dsh"),
-		"/Users/Robbin/.workbuddy/binaries/node/versions/22.22.2/lib/node_modules/@deepseek-ai/dsh",
+		process.env.DSH_INSTALL_ROOT,
+		// A DSH-managed Node runtime places its global packages beside its bin dir.
+		join(dirname(process.execPath), "..", "lib", "node_modules", "@deepseek-ai", "dsh"),
 		"/usr/local/lib/node_modules/@deepseek-ai/dsh",
 		"/opt/homebrew/lib/node_modules/@deepseek-ai/dsh",
 	].filter(Boolean);
@@ -268,7 +277,10 @@ function applyPatch() {
 			}
 			next = next.replace(edit.upstream, edit.patched);
 		}
-		writeFileSync(target.path, next);
+		// Write atomically: a crash cannot leave a partially-written DSH tool file.
+		const temporary = `${target.path}.dsh-rtk-${process.pid}.tmp`;
+		writeFileSync(temporary, next);
+		renameSync(temporary, target.path);
 		summary.push({ name: target.name, path: target.path, status: "patched" });
 	}
 	return summary;
@@ -291,10 +303,6 @@ export function apply(ctx, config) {
 				console.log(`[dsh-rtk] ${item.name}: ${item.status} (${item.path})`);
 			}
 		}
-		// Boot heartbeat: proves apply() ran (logs may be redirected by the host).
-		try {
-			writeFileSync("/tmp/dsh-rtk-heartbeat.txt", `dsh-rtk apply() ran at ${new Date().toISOString()}\n`, { flag: "a" });
-		} catch { /* non-fatal */ }
 	} catch (error) {
 		console.error(`[dsh-rtk] patch failed: ${String(error?.message ?? error)}`);
 	}

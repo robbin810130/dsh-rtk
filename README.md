@@ -1,115 +1,120 @@
-# RTK (Runtime Token Keeper) × DSH 集成
+# dsh-rtk
 
-把 [RTK](https://github.com/rtk-ai/rtk)（Rust Token Killer，终端输出过滤代理）接入 DSH 的
-`bash` 工具，自动把命令重写为 RTK 等价形式（例如 `git status` → `rtk git status`、
-`cat file` → `rtk read file`），让命令输出在进入 LLM 上下文之前被压缩，从而节省 token。
-机制与 Codex 的 PreToolUse hook 相同（`rtk rewrite`）。
+> 社区维护的 DeepSeek Harness（DSH）插件；非 DeepSeek AI 官方项目。
 
-## 前提
+`dsh-rtk` 在 DSH 服务启动时将 RTK（[Runtime Token Keeper](https://github.com/rtk-ai/rtk)）接入 bash 工具：可匹配的命令会先经 `rtk rewrite` 转换，使终端输出在进入 LLM 上下文前得到压缩，从而减少 token 消耗。
 
-- `rtk` 已安装：`/opt/homebrew/bin/rtk`（v0.45.0，`brew install rtk-ai/tap/rtk`）
-- 已确认在 Codex 中可用（`rtk init --codex`）
+它覆盖 macOS/Linux POSIX 环境中的两个 DSH 工具包：
 
-## 工作原理
+| DSH 工具包 | 覆盖的预设 |
+| --- | --- |
+| `@deepseek-ai/dsh-tool-bash` | standard / code / cordis |
+| `@deepseek-ai/dsh-tool-bash-persistent` | minimal |
 
-DSH 的 `bash` 工具在执行命令前调用 `rtk rewrite "<command>"`。补丁覆盖
-**两个 bash 工具包**（全部预设模式）：
+## 安装
 
-| 工具包 | 使用它的预设 | 状态 |
-| --- | --- | --- |
-| `@deepseek-ai/dsh-tool-bash`（一次性 shell） | standard / code / cordis | ✅ 已补丁 |
-| `@deepseek-ai/dsh-tool-bash-persistent`（持久 shell） | minimal（极简模式） | ✅ 已补丁 |
+### 前提
 
-> Windows 下的 PowerShell 工具（`dsh-tool-pwsh` 等）未补丁 —— RTK 的 `rtk rewrite`
-> 输出是 POSIX/bash 语法，PowerShell 场景需要单独评估；macOS 不受影响。
-
-`rtk rewrite "<command>"` 的判定：
-
-- 返回非空输出（RTK 有匹配过滤器）→ 执行重写后的命令（如 `rtk git status`），输出已被压缩
-- 返回空输出（exit 1，无 RTK 等价命令）→ 原样执行
-
-实测效果（v0.45.0）：
-
-| 原命令 | RTK 重写 | 效果 |
-| --- | --- | --- |
-| `git status` | `rtk git status` | ~10 行 → 2 行 |
-| `ls -la` | `rtk ls -la` | 紧凑列表 |
-| `cat file` | `rtk read file` | 小文件输出一致，大文件智能过滤 |
-| `find . -name '*.txt'` | `rtk find . -name '*.txt'` | 紧凑树形 |
-| `pnpm install` | `rtk pnpm install` | 去除构建噪音 |
-| `echo hello` | 不重写 | 原样执行 |
-| `ls -la \| head -5` | 不重写（管道） | 原样执行 |
-
-## 安装（已完成的修改）
-
-修改了 DSH 安装中的两个文件：
-
-**`dsh-tool-bash/lib/index.js`**（一次性 bash）：
-1. 新增 `spawnSync` 导入
-2. 新增 `rewriteWithRtk(command)` 辅助函数
-3. `execute()` 中用 `rewriteWithRtk(args.command)` 取代 `args.command` 构造请求
-4. `bash` 工具描述中说明输出可能被 RTK 压缩
-
-**`dsh-tool-bash-persistent/lib/index.js`**（持久 bash，极简模式）：
-1. 新增 `spawnSync` 导入
-2. 同样的 `rewriteWithRtk(command)` 辅助函数
-3. `executeCommand()` 开头用 `command = rewriteWithRtk(command)` 重写命令
-4. 工具描述追加相同的 RTK 说明
-
-> ⚠️ 这两个文件位于 node_modules，DSH 更新/重装后会丢失。届时运行：
->
-> ```bash
-> node "…/DSH 插件/rtk-token-keeper/patch-rtk.mjs" apply
-> ```
-
-### 关于 PATH（重要）
-
-DSH 的 bash 子进程 PATH 是受限的（不含 `/opt/homebrew/bin`），所以重写后的裸
-`rtk` 命令会解析失败（`bash: rtk: command not found`）。补丁已处理：重写结果中的
-命令位置 `rtk` 令牌会被替换为已解析的绝对路径（如 `/opt/homebrew/bin/rtk git status`），
-因此无需修改 PATH 也能生效。
-
-替换覆盖三种命令位置：命令开头、`; & |` 分隔符之后、`VAR=value` 环境变量前缀之后
-（例如 `GIT_PAGER=cat git log` → `GIT_PAGER=cat /opt/homebrew/bin/rtk git log`）。
-
-如果你希望 DSH 的 bash 子进程也能直接使用其他 Homebrew 工具（`pnpm`、`node` 等），
-需要修改 launchd 的 PATH（见下）。
-
-## 补丁脚本
+1. 安装 RTK：`brew install rtk-ai/tap/rtk`（或从 [RTK Releases](https://github.com/rtk-ai/rtk) 安装）。
+2. 设置 **RTK 的绝对路径**。插件刻意不从 `PATH` 查找 RTK，以避免 DSH 服务执行意外二进制：
 
 ```bash
-node patch-rtk.mjs apply    # 应用补丁到两个 bash 工具包（幂等，已应用则跳过）
-node patch-rtk.mjs check    # 查看两个目标的补丁状态
-node patch-rtk.mjs revert   # 恢复两个文件的原始上游
+# Apple Silicon Homebrew 的典型路径；请按你的安装位置调整
+launchctl setenv RTK_BIN /opt/homebrew/bin/rtk
 ```
 
-脚本会在 `.backup/` 下为每个目标保存一份原始文件，`revert` 用它恢复。
-
-## 开关与配置
-
-- `DSH_RTK_DISABLE=1`（环境变量）→ 全局关闭 RTK 重写
-- 命令前加 `DSH_RTK_DISABLE=1` → 单条命令关闭重写（用于需要精确原始输出的场景，
-  例如精确的 `git diff` 内容、完整文件读取）
-- `RTK_BIN=/path/to/rtk` → 覆盖 rtk 二进制路径
-
-## 生效方式
-
-修改的是服务端包。**重启 dsh web 服务**后生效；当前已运行的会话仍使用旧代码。
-
-dsh web 由 launchd 管理（`~/Library/LaunchAgents/ai.deepseek.harness.plist`，
-`KeepAlive` 为 true，服务退出后会自动重启）。重启方式：
+### 通过 GitHub 安装（推荐）
 
 ```bash
-# 方式一：直接杀掉进程，launchd 会自动重启
+dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.1
+```
+
+安装后重启 dsh web 服务，使 bundle 在启动阶段加载：
+
+```bash
 kill "$(lsof -tiTCP:3080 -sTCP:LISTEN)"
-
-# 方式二：通过 launchctl 重启
-launchctl kickstart -k "gui/$(id -u)/ai.deepseek.harness"
 ```
 
-> 注意：当前正在服务进程内运行的 agent 回合会被重启中断，重启完成后需要刷新页面
-> 并重新发消息继续。
+> `dsh plugin` 使用 pnpm 管理 profile 依赖；GitHub 直装不要求 npm 账号。未来发布到 npm 后，也可使用 `dsh plugin --profile web add @robbin810130/dsh-rtk@<version>`。
 
-如需让子进程 PATH 包含 `/opt/homebrew/bin`（例如让 rtk 内部调用的 Homebrew 工具可
-用），修改 plist 中的 `EnvironmentVariables.PATH` 后重启服务，或运行
-`launchctl setenv PATH "/opt/homebrew/bin:$PATH"` 再重启。
+## 验证
+
+在有 Git 仓库的目录调用 bash 工具：
+
+```bash
+git status
+# 预期：RTK 的紧凑输出，例如：
+# * On branch main
+# A  example.txt
+```
+
+关闭单条命令的重写以获得原始输出：
+
+```bash
+DSH_RTK_DISABLE=1 git status
+```
+
+## 权限、风险与兼容性
+
+### 文件写入与完整性边界
+
+DSH 当前没有公开的 bash 命令预执行拦截接口；因此此插件以**内容锚点补丁**方式修改已安装的：
+
+- `@deepseek-ai/dsh-tool-bash/lib/index.js`
+- `@deepseek-ai/dsh-tool-bash-persistent/lib/index.js`
+
+每次启动会读取两个文件；仅当所有已知上游锚点都匹配时才写入。锚点不匹配（通常表示 DSH 更新）时，插件会拒绝修改，不会猜测兼容性。
+
+- 写入使用同目录临时文件后 `rename` 的原子替换，避免半写入的工具文件。
+- 补丁前的副本保存到 `~/.dsh/dsh-rtk/`（或 `$XDG_STATE_HOME/dsh-rtk/`），**不会**写入 npm/pnpm 安装目录。
+- 需要对 DSH 全局安装目录拥有写权限；只读安装、Docker 镜像或 DSH 版本不匹配时不会生效。
+- 这是修改宿主包的集成方案，不适用于 Windows PowerShell 工具；Windows/macOS/Linux 兼容性应在安装前自行验证。
+
+### 外部进程与数据
+
+每个可重写的 bash 命令都会作为参数传给你显式配置的 `RTK_BIN rewrite <command>`。因此 RTK 二进制能够看到命令文本；仅设置为你信任的本地 RTK 可执行文件。插件不发送网络请求、不收集遥测、不读取命令输出以外的数据。
+
+## 配置与退出开关
+
+| 设置 | 效果 |
+| --- | --- |
+| `RTK_BIN=/absolute/path/to/rtk` | 必需：明确指定受信任的 RTK 二进制 |
+| `DSH_RTK_DISABLE=1` | 全局关闭重写 |
+| `DSH_RTK_DISABLE=1 <command>` | 单条或复合命令关闭重写 |
+
+要让插件在 profile 中保持安装但不自动应用补丁，可在 `~/.dsh/profiles/web/cordis.patch.yml` 添加：
+
+```yaml
+- config:
+    - id: dsh-rtk
+      enabled: false
+```
+
+## 卸载与恢复
+
+```bash
+dsh plugin --profile web remove @robbin810130/dsh-rtk
+```
+
+移除插件不会自动恢复宿主工具文件。需要恢复时，请从 `~/.dsh/dsh-rtk/` 备份手工还原，或使用本仓库的开发者工具：
+
+```bash
+node patch-rtk.mjs revert
+```
+
+## 开发与测试
+
+- `dsh-rtk/lib/index.js`：插件入口与补丁逻辑
+- `cordis.patch.yml`：DSH bundle 入口
+- `patch-rtk.mjs`：开发/救援用的双目标 `apply`、`check`、`revert` CLI
+
+发布前至少运行：
+
+```bash
+node --check dsh-rtk/lib/index.js
+npm pack --dry-run
+```
+
+## License
+
+[MIT](LICENSE)

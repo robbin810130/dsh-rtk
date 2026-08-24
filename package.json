@@ -1,18 +1,21 @@
 {
-  "name": "dsh-rtk",
-  "version": "1.0.0",
-  "description": "DSH plugin: auto-apply the RTK (Runtime Token Keeper) patch to the bash tool packages at every boot, so every agent preset saves tokens on command output.",
+  "name": "@robbin810130/dsh-rtk",
+  "version": "1.0.1",
+  "description": "DSH plugin that applies an explicit, RTK-based command-output filter to bash tools at boot.",
+  "author": "陈晓斌 <Robbin@MacBook-Pro.local>",
   "type": "module",
-  "main": "lib/index.js",
+  "main": "./dsh-rtk/lib/index.js",
   "exports": {
     ".": {
-      "default": "./lib/index.js"
+      "import": "./dsh-rtk/lib/index.js",
+      "default": "./dsh-rtk/lib/index.js"
     }
   },
   "files": [
-    "lib/index.js",
+    "dsh-rtk/lib/index.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
@@ -21,6 +24,13 @@
   },
   "dependencies": {
     "schemastery": "^3.5.2"
+  },
+  "scripts": {
+    "test": "node ./test/marketplace-smoke.mjs",
+    "prepack": "npm test"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "repository": {
     "type": "git",
