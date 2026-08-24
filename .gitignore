@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Generated backup copies of the pristine DSH tool files (created by
+# patch-rtk.mjs apply / the dsh-rtk plugin at runtime) — never commit these,
+# they are content from the installed DSH node_modules.
+.backup/
+dsh-rtk/.backup/
+restart-report.txt
+
+# Dependencies and build output
+node_modules/
+dist/
+*.log
+
+# Local runtime state
+*.pid

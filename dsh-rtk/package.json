@@ -1,0 +1,21 @@
+{
+  "name": "dsh-rtk",
+  "version": "1.0.0",
+  "description": "DSH plugin: auto-apply the RTK (Runtime Token Keeper) patch to the bash tool packages at every boot, so every agent preset saves tokens on command output.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "schemastery": "^3.5.2"
+  },
+  "license": "MIT"
+}
