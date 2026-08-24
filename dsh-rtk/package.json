@@ -9,6 +9,11 @@
       "default": "./lib/index.js"
     }
   },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -17,5 +22,20 @@
   "dependencies": {
     "schemastery": "^3.5.2"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robbin810130/dsh-rtk.git"
+  },
+  "homepage": "https://github.com/robbin810130/dsh-rtk",
+  "bugs": {
+    "url": "https://github.com/robbin810130/dsh-rtk/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "rtk",
+    "token",
+    "plugin"
+  ],
   "license": "MIT"
 }

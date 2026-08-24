@@ -12,6 +12,7 @@ restart-report.txt
 node_modules/
 dist/
 *.log
+*.tgz
 
 # Local runtime state
 *.pid
