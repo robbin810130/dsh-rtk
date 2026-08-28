@@ -1,4 +1,5 @@
 # dsh-rtk
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/robbin810130/dsh-rtk)
 
 > 社区维护的 DeepSeek Harness（DSH）插件；非 DeepSeek AI 官方项目。
 
