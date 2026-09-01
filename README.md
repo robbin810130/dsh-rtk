@@ -27,7 +27,7 @@ launchctl setenv RTK_BIN /opt/homebrew/bin/rtk
 ### 通过 GitHub 安装（推荐）
 
 ```bash
-dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.1
+dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.2
 ```
 
 安装后重启 dsh web 服务，使 bundle 在启动阶段加载：

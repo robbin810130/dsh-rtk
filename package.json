@@ -1,6 +1,6 @@
 {
   "name": "@robbin810130/dsh-rtk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "DSH plugin that applies an explicit, RTK-based command-output filter to bash tools at boot.",
   "author": "陈晓斌 <Robbin@MacBook-Pro.local>",
   "type": "module",

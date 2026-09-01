@@ -38,7 +38,6 @@ const BACKUP_DIR = join(here, ".backup");
 function findDshRoot() {
   const candidates = [
     process.env.DSH_HOME && join(process.env.DSH_HOME, "..", "lib", "node_modules", "@deepseek-ai", "dsh"),
-    "/Users/Robbin/.workbuddy/binaries/node/versions/22.22.2/lib/node_modules/@deepseek-ai/dsh",
     "/usr/local/lib/node_modules/@deepseek-ai/dsh",
     "/opt/homebrew/lib/node_modules/@deepseek-ai/dsh",
   ].filter(Boolean);
