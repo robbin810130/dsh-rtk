@@ -2,4 +2,4 @@
 # installed through `dsh plugin --profile web add`.
 - insert:
     - id: dsh-rtk
-      name: '@robbin810130/dsh-rtk'
+      name: 'dsh-rtk'

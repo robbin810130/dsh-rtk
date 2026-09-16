@@ -12,6 +12,21 @@
 | `@deepseek-ai/dsh-tool-bash` | standard / code / cordis |
 | `@deepseek-ai/dsh-tool-bash-persistent` | minimal |
 
+## 从旧 scoped 包迁移
+
+1.0.3 的实际包名改为 `dsh-rtk`，GitHub 仓库地址不变；本次不是 npm 注册表发布。
+
+**已安装 `@robbin810130/dsh-rtk` 时，不能直接覆盖安装或同时加载新旧两份插件。** 先停止 DSH，备份整个 web profile 和插件状态目录，再按顺序执行：
+
+```bash
+dsh plugin --profile web remove @robbin810130/dsh-rtk
+dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.3
+```
+
+确认 profile 仅有一个新包及一个 bundle 后再启动。保留原节点 ID、设置和 RTK 备份目录。安装失败时保持停服并还原 profile 备份，不删除原有宿主工具备份。
+
+依赖管理器可能重新生成其他插件的目录。若其他插件把运行数据写在 node_modules 下，须在停服备份后、启动前从备份恢复该数据目录，并校验其余插件文件未变。
+
 ## 安装
 
 ### 前提
@@ -27,7 +42,7 @@ launchctl setenv RTK_BIN /opt/homebrew/bin/rtk
 ### 通过 GitHub 安装（推荐）
 
 ```bash
-dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.2
+dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.3
 ```
 
 安装后重启 dsh web 服务，使 bundle 在启动阶段加载：
@@ -36,7 +51,7 @@ dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.2
 kill "$(lsof -tiTCP:3080 -sTCP:LISTEN)"
 ```
 
-> `dsh plugin` 使用 pnpm 管理 profile 依赖；GitHub 直装不要求 npm 账号。未来发布到 npm 后，也可使用 `dsh plugin --profile web add @robbin810130/dsh-rtk@<version>`。
+> `dsh plugin` 使用 pnpm 管理 profile 依赖；GitHub 直装不要求 npm 账号。未来发布到 npm 后，也可使用 `dsh plugin --profile web add dsh-rtk@<version>`。
 
 ## 验证
 
@@ -94,7 +109,7 @@ DSH 当前没有公开的 bash 命令预执行拦截接口；因此此插件以*
 ## 卸载与恢复
 
 ```bash
-dsh plugin --profile web remove @robbin810130/dsh-rtk
+dsh plugin --profile web remove dsh-rtk
 ```
 
 移除插件不会自动恢复宿主工具文件。需要恢复时，请从 `~/.dsh/dsh-rtk/` 备份手工还原，或使用本仓库的开发者工具：
