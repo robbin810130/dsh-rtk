@@ -1,7 +1,7 @@
 {
   "name": "dsh-rtk",
-  "version": "1.0.3",
-  "description": "DSH plugin that applies an explicit, RTK-based command-output filter to bash tools at boot.",
+  "version": "1.1.0",
+  "description": "DSH plugin that rewrites bash commands through the supported tools/execute hook.",
   "author": "陈晓斌 <Robbin@MacBook-Pro.local>",
   "type": "module",
   "main": "./dsh-rtk/lib/index.js",
@@ -26,7 +26,7 @@
     "schemastery": "^3.5.2"
   },
   "scripts": {
-    "test": "node ./test/marketplace-smoke.mjs",
+    "test": "node ./test/marketplace-smoke.mjs && node ./test/runtime.mjs",
     "prepack": "npm test"
   },
   "engines": {
@@ -47,5 +47,10 @@
     "token",
     "plugin"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  }
 }

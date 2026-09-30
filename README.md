@@ -3,102 +3,70 @@
 
 > 社区维护的 DeepSeek Harness（DSH）插件；非 DeepSeek AI 官方项目。
 
-`dsh-rtk` 在 DSH 服务启动时将 RTK（[Runtime Token Keeper](https://github.com/rtk-ai/rtk)）接入 bash 工具：可匹配的命令会先经 `rtk rewrite` 转换，使终端输出在进入 LLM 上下文前得到压缩，从而减少 token 消耗。
+将 bash 命令交给本机 [RTK](https://github.com/rtk-ai/rtk) 重写，在输出进入模型上下文之前压缩输出。
 
-它覆盖 macOS/Linux POSIX 环境中的两个 DSH 工具包：
+## 1.1.0：新版 DSH 兼容
 
-| DSH 工具包 | 覆盖的预设 |
-| --- | --- |
-| `@deepseek-ai/dsh-tool-bash` | standard / code / cordis |
-| `@deepseek-ai/dsh-tool-bash-persistent` | minimal |
+使用 DSH 的 `tools/execute` around-dispatch 接口，不再查找全局 npm 安装目录、修改宿主源码或依赖源码锚点。支持桌面版 `app.asar` 安装，覆盖注册为 `bash` 的普通与 persistent 工具。
 
-## 从旧 scoped 包迁移
+已验证 DSH **0.2.0-rc.2** 的 npm ToolRuntime 和 macOS 桌面版内置 ToolRuntime，以及 RTK **0.45.0**。其他版本和 Windows/Linux 桌面环境尚未实机验证。
 
-1.0.3 的实际包名改为 `dsh-rtk`，GitHub 仓库地址不变；本次不是 npm 注册表发布。
-
-**已安装 `@robbin810130/dsh-rtk` 时，不能直接覆盖安装或同时加载新旧两份插件。** 先停止 DSH，备份整个 web profile 和插件状态目录，再按顺序执行：
-
-```bash
-dsh plugin --profile web remove @robbin810130/dsh-rtk
-dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.3
-```
-
-确认 profile 仅有一个新包及一个 bundle 后再启动。保留原节点 ID、设置和 RTK 备份目录。安装失败时保持停服并还原 profile 备份，不删除原有宿主工具备份。
-
-依赖管理器可能重新生成其他插件的目录。若其他插件把运行数据写在 node_modules 下，须在停服备份后、启动前从备份恢复该数据目录，并校验其余插件文件未变。
+- DSH 的前置权限检查仍按原始命令执行；重写后的命令交给原 bash 工具，其沙箱、权限升级、超时和工作目录逻辑保持执行。
+- 替换冻结参数快照，不修改输入对象；执行完成后恢复原参数用于后续结果观察。
+- 插件卸载时由 Cordis 自动释放事件监听。
+- 只执行显式配置的绝对路径 `RTK_BIN`，不从 PATH 搜索可执行文件。
+- RTK 返回 0 或 3 且有输出时使用重写建议；拒绝、未知命令、进程错误或超时回退原命令。退出码 3 仅是 RTK 建议状态，不能代替 DSH 的权限检查。
 
 ## 安装
 
-### 前提
-
-1. 安装 RTK：`brew install rtk-ai/tap/rtk`（或从 [RTK Releases](https://github.com/rtk-ai/rtk) 安装）。
-2. 设置 **RTK 的绝对路径**。插件刻意不从 `PATH` 查找 RTK，以避免 DSH 服务执行意外二进制：
+先安装 RTK，并在 **DSH 服务进程的环境**中设置路径：
 
 ```bash
-# Apple Silicon Homebrew 的典型路径；请按你的安装位置调整
+# Apple Silicon Homebrew 的典型路径
 launchctl setenv RTK_BIN /opt/homebrew/bin/rtk
 ```
 
-### 通过 GitHub 安装（推荐）
+桌面应用须完全退出并重新启动以继承环境。已运行的应用不会自动继承新环境。
+
+本地安装包：
 
 ```bash
-dsh plugin --profile web add github:robbin810130/dsh-rtk#v1.0.3
+dsh plugin --profile web add /absolute/path/dsh-rtk-1.1.0.tgz
 ```
 
-安装后重启 dsh web 服务，使 bundle 在启动阶段加载：
+随后通过当前使用的桌面应用或服务管理器重启 DSH。不要额外启动第二个 web 服务。
+
+GitHub 安装：
 
 ```bash
-kill "$(lsof -tiTCP:3080 -sTCP:LISTEN)"
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.1.0
 ```
 
-> `dsh plugin` 使用 pnpm 管理 profile 依赖；GitHub 直装不要求 npm 账号。未来发布到 npm 后，也可使用 `dsh plugin --profile web add dsh-rtk@<version>`。
+请使用实际运行的 profile 名称；桌面版通常是 `desktop`，web 服务通常是 `web`。
 
-## 验证
+## 升级旧版
 
-在有 Git 仓库的目录调用 bash 工具：
+升级前备份 profile。只保留一个 `dsh-rtk` bundle；若仍安装 scoped 旧包 `@robbin810130/dsh-rtk`，先移除旧包。
+
+旧版曾直接修改宿主 bash 工具。升级到新插件**不会自动还原这些修改**。若继续使用同一份旧宿主文件，先用对应版本的原包恢复工具文件，防止两套重写叠加。不要把旧版本备份覆盖到新版 DSH 上。桌面版内置的原始 `app.asar` 不需要这一步。
+
+## 验证和禁用
+
+在 Git 仓库中让 DSH 的 bash 工具执行 `git status`，应得到 RTK 的紧凑输出。普通终端直接运行 `git status` 不经过 DSH 插件。
+
+需要完整文件、精确 diff 或其他原始输出时：
 
 ```bash
-git status
-# 预期：RTK 的紧凑输出，例如：
-# * On branch main
-# A  example.txt
+DSH_RTK_DISABLE=1 git diff
 ```
-
-关闭单条命令的重写以获得原始输出：
-
-```bash
-DSH_RTK_DISABLE=1 git status
-```
-
-## 权限、风险与兼容性
-
-### 文件写入与完整性边界
-
-DSH 当前没有公开的 bash 命令预执行拦截接口；因此此插件以**内容锚点补丁**方式修改已安装的：
-
-- `@deepseek-ai/dsh-tool-bash/lib/index.js`
-- `@deepseek-ai/dsh-tool-bash-persistent/lib/index.js`
-
-每次启动会读取两个文件；仅当所有已知上游锚点都匹配时才写入。锚点不匹配（通常表示 DSH 更新）时，插件会拒绝修改，不会猜测兼容性。
-
-- 写入使用同目录临时文件后 `rename` 的原子替换，避免半写入的工具文件。
-- 补丁前的副本保存到 `~/.dsh/dsh-rtk/`（或 `$XDG_STATE_HOME/dsh-rtk/`），**不会**写入 npm/pnpm 安装目录。
-- 需要对 DSH 全局安装目录拥有写权限；只读安装、Docker 镜像或 DSH 版本不匹配时不会生效。
-- 这是修改宿主包的集成方案，不适用于 Windows PowerShell 工具；Windows/macOS/Linux 兼容性应在安装前自行验证。
-
-### 外部进程与数据
-
-每个可重写的 bash 命令都会作为参数传给你显式配置的 `RTK_BIN rewrite <command>`。因此 RTK 二进制能够看到命令文本；仅设置为你信任的本地 RTK 可执行文件。插件不发送网络请求、不收集遥测、不读取命令输出以外的数据。
-
-## 配置与退出开关
 
 | 设置 | 效果 |
 | --- | --- |
-| `RTK_BIN=/absolute/path/to/rtk` | 必需：明确指定受信任的 RTK 二进制 |
-| `DSH_RTK_DISABLE=1` | 全局关闭重写 |
-| `DSH_RTK_DISABLE=1 <command>` | 单条或复合命令关闭重写 |
+| `RTK_BIN=/absolute/path/to/rtk` | 指定受信任的本机 RTK |
+| `DSH_RTK_DISABLE=1` | 在服务环境中全局关闭重写 |
+| `DSH_RTK_DISABLE=1 <command>` | 整条命令跳过重写，包括复合命令 |
 
-要让插件在 profile 中保持安装但不自动应用补丁，可在 `~/.dsh/profiles/web/cordis.patch.yml` 添加：
+保留安装但不启用，可在 profile 的 `cordis.patch.yml` 中配置：
 
 ```yaml
 - config:
@@ -106,30 +74,29 @@ DSH 当前没有公开的 bash 命令预执行拦截接口；因此此插件以*
       enabled: false
 ```
 
-## 卸载与恢复
+RTK 二进制会收到命令文本，只应配置可信程序。插件自身不发送网络请求。RTK 可能缩短输出，精确取证时应使用禁用开关。
+
+## 卸载
 
 ```bash
 dsh plugin --profile web remove dsh-rtk
 ```
 
-移除插件不会自动恢复宿主工具文件。需要恢复时，请从 `~/.dsh/dsh-rtk/` 备份手工还原，或使用本仓库的开发者工具：
-
-```bash
-node patch-rtk.mjs revert
-```
+新版不修改宿主文件，无需恢复源码；完全重启 DSH 后确认不再加载插件。
 
 ## 开发与测试
 
-- `dsh-rtk/lib/index.js`：插件入口与补丁逻辑
-- `cordis.patch.yml`：DSH bundle 入口
-- `patch-rtk.mjs`：开发/救援用的双目标 `apply`、`check`、`revert` CLI
-
-发布前至少运行：
-
 ```bash
-node --check dsh-rtk/lib/index.js
-npm pack --dry-run
+npm install
+npm test
+npm pack --pack-destination artifacts
+# 可选：验证本机 RTK
+DSH_RTK_TEST_BIN=/absolute/path/to/rtk npm test
 ```
+
+`test/runtime.mjs` 使用真实 DSH 0.2.0-rc.2 ToolRuntime 验证命令重写、冻结参数兼容、权限拒绝、退出码、禁用开关及监听释放。测试工具返回收到的命令，不调用模型或执行业务命令。
+
+`patch-rtk.mjs` 和 `restart-dsh.sh` 是旧版救援工具，保留用于旧宿主恢复；**不用于新版桌面 DSH 安装或重启**。
 
 ## License
 
