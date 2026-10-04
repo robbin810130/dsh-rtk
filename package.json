@@ -1,6 +1,6 @@
 {
   "name": "dsh-rtk",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "DSH plugin that rewrites bash commands through the supported tools/execute hook.",
   "author": "陈晓斌 <Robbin@MacBook-Pro.local>",
   "type": "module",

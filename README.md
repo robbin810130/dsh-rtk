@@ -5,6 +5,11 @@
 
 将 bash 命令交给本机 [RTK](https://github.com/rtk-ai/rtk) 重写，在输出进入模型上下文之前压缩输出。
 
+## 1.2.1：自检不撒谎
+
+- `npm run doctor` 用 pid 交叉核对状态文件：只有状态文件的 pid 出现在运行中的宿主进程里，才算"本次运行确实加载了插件"；陈旧记录会明确标为「来自上一次运行或手动执行插件」，不再被当成生效证据。
+- 排障表补充对应条目。
+
 ## 1.2.0：安装即生效
 
 1.1.0 用 `tools/execute` 钩子替换了"改宿主源码"的老做法，但**装好之后是否真的生效，插件一个字都不说**：只要 DSH 服务进程的环境里没有 `RTK_BIN`，插件就安静地什么都不做。1.2.0 修掉这一整类问题：
@@ -27,13 +32,13 @@ rtk --version             # 确认可用
 **2. 装插件到正在使用的 profile**（桌面版通常是 `desktop`）：
 
 ```bash
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.2.0
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.2.1
 ```
 
 本地安装包同理：
 
 ```bash
-dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.2.0.tgz
+dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.2.1.tgz
 ```
 
 **3. 完全退出并重新打开 DSH**（`Cmd+Q`；只关窗口不会重新加载插件）。不要额外启动第二个 web 服务。
@@ -101,6 +106,7 @@ export RTK_BIN=/absolute/path/to/rtk
 | 日志出现「RTK_BIN 不可用」 | 显式设置指向了不存在的路径 → 改对或删掉该项 |
 | `doctor` 报「宿主用的 profile 没有安装 dsh-rtk」 | 插件装到了别的 profile → 用宿主实际使用的 profile 重装 |
 | 一切正常但输出仍是原生格式 | 该命令没有 RTK 等价实现（RTK 退出码 1，属正常），或它是多行脚本；另外确认 `DSH_RTK_DISABLE` 未在服务环境中为 `1` |
+| doctor 报「状态文件来自 pid X，不在当前运行中的宿主里」 | 那份记录来自上一次运行或手动执行插件，不代表本次已加载 → 重启 DSH 后重跑；确认无误也可直接删除 `$DSH_HOME/dsh-rtk/status.json` |
 | 只改了配置没重启 | profile 配置与环境变量都需要完全重启 DSH 才生效 |
 
 安全说明：RTK 二进制会收到命令文本，因此自动发现只探测上表那批固定路径，绝不搜索 `PATH`，并拒绝 world-writable、非本人/非 root 属主的文件；插件自身不发送网络请求。RTK 可能缩短输出，精确取证时请使用 `DSH_RTK_DISABLE=1`。

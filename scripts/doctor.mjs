@@ -126,10 +126,12 @@ const status = readStatus();
 const profileNames = new Set(profiles.map((entry) => entry.profile));
 const hostUncovered = hosts.find((host) => host.profile !== null && !profileNames.has(host.profile)) ?? null;
 const hostDisabled = hosts.find((host) => host.disabled === '1' || host.disabled === 'true') ?? null;
-// The plugin writes the status file on every boot it participates in, so its
-// absence while a host is running means that host never loaded this version:
-// either it has not been restarted yet, or the entry failed to import.
-const runtimeSeen = status !== null;
+// The plugin writes the status file on every boot it participates in, so a record
+// whose pid is not among the running hosts is not evidence that *this* host loaded
+// it (it may be a stale record from a previous run, or a manual import).
+const statusHost = status === null ? null : hosts.find((host) => host.pid === status.pid) ?? null;
+const statusIsStale = status !== null && hosts.length > 0 && statusHost === null;
+const runtimeSeen = hosts.length === 0 ? status !== null : statusHost !== null;
 const ok = resolution.ok
   && profiles.some((entry) => entry.problems.length === 0)
   && hostUncovered === null
@@ -147,6 +149,9 @@ if (asJson) {
     profiles,
     hosts,
     status,
+    statusHostPid: statusHost?.pid ?? null,
+    statusIsStale,
+    runtimeSeen,
     ok,
   }, null, 2));
   process.exit(ok ? 0 : 1);
@@ -196,17 +201,22 @@ if (hosts.length === 0) {
     say(`    ⚠️  宿主进程里的 RTK_BIN=${hostBin} 优先于本命令的解析结果，插件会以宿主环境为准`);
   }
 }
-if (status !== null) {
-  say(`    最近一次插件记录：${status.updatedAt} · active=${status.active} · ${status.bin ?? status.reason ?? 'n/a'} · 改写 ${status.rewrites} 次${status.passthrough === undefined ? '' : ` · 无等价命令 ${status.passthrough} 次`} · profile ${status.profile ?? '(未知)'}`);
+if (status === null) {
+  if (hosts.length > 0) {
+    say(`    ❌ 运行中的宿主没有留下本版本的启动记录（缺少 ${join(dshHome, 'dsh-rtk', 'status.json')}）`);
+    say('       刚装完还没重启 → 完全退出并重开 DSH；否则检查宿主 profile 是否正确，以及启动输出里是否出现 failed to import / did not activate');
+  } else {
+    say(`    尚无 ${join(dshHome, 'dsh-rtk', 'status.json')}：插件还没在 DSH 里跑起来过`);
+  }
+} else if (statusIsStale) {
+  say(`    ❌ 状态文件来自 pid ${status.pid}（${status.updatedAt}），不在当前运行中的宿主里 —— 可能是上一次运行或手动执行插件留下的`);
+  say('       重启 DSH 后再看这里，才是本次运行的真实状态');
+} else {
+  say(`    最近一次插件记录：${status.updatedAt} · active=${status.active} · ${status.bin ?? status.reason ?? 'n/a'} · 改写 ${status.rewrites} 次${status.passthrough === undefined ? '' : ` · 无等价命令 ${status.passthrough} 次`} · profile ${status.profile ?? '(未知)'}${statusHost === null ? '' : '（宿主 pid 匹配）'}`);
   if (status.lastError != null) say(`    最近错误：${status.lastError.reason}（${status.lastError.at}）`);
   if (status.active !== true && typeof status.hint === 'string') {
     for (const line of status.hint.split('\n')) say(`    ${line}`);
   }
-} else if (hosts.length > 0) {
-  say(`    ❌ 运行中的宿主没有留下本版本的启动记录（缺少 ${join(dshHome, 'dsh-rtk', 'status.json')}）`);
-  say('       刚装完还没重启 → 完全退出并重开 DSH；否则检查宿主 profile 是否正确，以及启动输出里是否出现 failed to import / did not activate');
-} else {
-  say(`    尚无 ${join(dshHome, 'dsh-rtk', 'status.json')}：插件还没在 DSH 里跑起来过`);
 }
 say();
 say(ok ? '结论：配置就绪 —— 重启对应 profile 后 bash 命令会被 RTK 改写。' : '结论：还不能生效，按上面 ❌ 的提示修复。');
