@@ -11,10 +11,13 @@ import { apply, rewriteWithRtk } from '../dsh-rtk/lib/index.js';
 
 const directory = mkdtempSync(join(tmpdir(), "rtk test's "));
 const bin = join(directory, 'rtk');
-const saved = { bin: process.env.RTK_BIN, disabled: process.env.DSH_RTK_DISABLE };
+const saved = { bin: process.env.RTK_BIN, disabled: process.env.DSH_RTK_DISABLE, home: process.env.DSH_HOME };
+// Keep the plugin's status file inside the throwaway directory instead of ~/.dsh.
+process.env.DSH_HOME = join(directory, 'dsh-home');
 const ctx = new Context();
 try {
-  writeFileSync(bin, '#!/bin/sh\nprintf "%s" "rtk git status"\nexit "${RTK_TEST_STATUS:-0}"\n', { mode: 0o700 });
+  // Mirrors RTK's documented contract: exit 1 with no output means "no RTK equivalent".
+  writeFileSync(bin, '#!/bin/sh\n[ "${RTK_TEST_STATUS:-0}" = "1" ] && exit 1\nprintf "%s" "rtk git status"\nexit "${RTK_TEST_STATUS:-0}"\n', { mode: 0o700 });
   process.env.RTK_BIN = bin;
   delete process.env.DSH_RTK_DISABLE;
   await ctx.plugin(SystemPrompt);
@@ -74,7 +77,7 @@ try {
 } finally {
   await ctx.fiber.dispose();
   rmSync(directory, { recursive: true, force: true });
-  for (const [key, value] of [['RTK_BIN', saved.bin], ['DSH_RTK_DISABLE', saved.disabled]]) {
+  for (const [key, value] of [['RTK_BIN', saved.bin], ['DSH_RTK_DISABLE', saved.disabled], ['DSH_HOME', saved.home]]) {
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
   delete process.env.RTK_TEST_STATUS;

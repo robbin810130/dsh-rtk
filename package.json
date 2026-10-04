@@ -1,6 +1,6 @@
 {
   "name": "dsh-rtk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "DSH plugin that rewrites bash commands through the supported tools/execute hook.",
   "author": "陈晓斌 <Robbin@MacBook-Pro.local>",
   "type": "module",
@@ -13,6 +13,7 @@
   },
   "files": [
     "dsh-rtk/lib/index.js",
+    "scripts/doctor.mjs",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -26,7 +27,8 @@
     "schemastery": "^3.5.2"
   },
   "scripts": {
-    "test": "node ./test/marketplace-smoke.mjs && node ./test/runtime.mjs",
+    "test": "node ./test/marketplace-smoke.mjs && node ./test/resolve.mjs && node ./test/runtime.mjs",
+    "doctor": "node ./scripts/doctor.mjs",
     "prepack": "npm test"
   },
   "engines": {

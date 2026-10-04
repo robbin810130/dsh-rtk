@@ -1,5 +1,14 @@
 # dsh-rtk bundle patch. The DSH launcher loads this file when the package is
-# installed through `dsh plugin --profile web add`.
+# installed through `dsh plugin --profile <name> add`.
+#
+# Configuration is optional: the plugin finds a local RTK on its own (see
+# README「安装」/「配置」). Per-profile overrides belong in the profile's own
+# cordis.patch.yml, not here, for example:
+#
+#   - id: dsh-rtk
+#     config:
+#       bin: /opt/homebrew/bin/rtk
+#       verbose: true
 - insert:
     - id: dsh-rtk
       name: 'dsh-rtk'
