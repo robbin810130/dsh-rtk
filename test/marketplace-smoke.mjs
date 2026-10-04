@@ -9,6 +9,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const patch = readFileSync(join(root, "cordis.patch.yml"), "utf8");
 const source = readFileSync(join(root, "dsh-rtk", "lib", "index.js"), "utf8");
 const readme = readFileSync(join(root, "README.md"), "utf8");
+const windowsDoc = readFileSync(join(root, "docs", "windows.md"), "utf8");
 
 assert.equal(pkg.name, "dsh-rtk");
 assert.equal(pkg.dsh?.bundle?.patch, "./cordis.patch.yml");
@@ -33,6 +34,14 @@ assert.match(source, /win32/, "the plugin must branch on platform");
 assert.match(source, /\.exe/, "the Windows candidate list must name executable images");
 assert.match(readme, /Windows/, "README must document Windows support");
 assert.match(readme, /pwsh/, "README must name the Windows shell tool");
+
+// The Windows guide is shipped and linked; keep its load-bearing facts asserted.
+assert.equal(pkg.files.includes("docs/windows.md"), true, "the Windows guide must ship with the package");
+assert.match(readme, /docs\/windows\.md/, "README must link the Windows guide");
+assert.match(windowsDoc, /setx/, "the guide must document the registry-backed user environment");
+assert.match(windowsDoc, /\$PROFILE/, "the guide must warn that a PowerShell profile is ignored by DSH");
+assert.match(windowsDoc, /\.cmd/, "the guide must explain why .cmd wrappers are refused");
+assert.match(windowsDoc, /rtk\.exe/, "the guide must name the Windows executable");
 
 assert.doesNotMatch(source, /\/Users\/Robbin|dsh-rtk-heartbeat/);
 

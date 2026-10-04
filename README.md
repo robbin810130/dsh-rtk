@@ -15,7 +15,14 @@
 
 关键差异：DSH 在 `dsh-base` 里按平台开关 shell 工具 —— `tool-bash` 在 win32 上被 `disabled`，Windows 用的是 `tool-pwsh`。插件按**方言**匹配工具而不是写死 `bash`：POSIX 用单引号（`'\''` 转义），PowerShell 用单引号（`''` 转义）；单条命令的跳过语法也分别是 `DSH_RTK_DISABLE=1 <cmd>` 和 `$env:DSH_RTK_DISABLE='1'; <cmd>`。
 
+环境来源也不一样：macOS/Linux 上 DSH 会读**登录 shell** 环境（所以 `~/.zshrc` 里的 `RTK_BIN` 有效），Windows 上直接继承**注册表用户环境变量**、不读任何 shell 配置（写进 `$PROFILE` 无效）。**Windows 的安装位置、环境变量与排障见 [docs/windows.md](docs/windows.md)。**
+
 `.github/workflows/ci.yml` 在 ubuntu / macos / windows 三平台 × Node 22/24 上跑 `npm test`。
+
+## 1.3.2：Windows 使用说明
+
+- 新增 [docs/windows.md](docs/windows.md)：RTK 在 Windows 的四种安装方式与落点、自动发现清单、`setx` 与 profile 配置两种显式指定方式、重启验证步骤，以及「`$PROFILE` 无效」「`.cmd` 被拒」「路径含空格」等 Windows 专有排障。
+- 说明文档随包发布（`files` 增加 `docs/windows.md`）。
 
 ## 1.3.1：升级后不再谎报"已生效"
 
@@ -65,13 +72,13 @@ where.exe rtk
 **2. 装插件到正在使用的 profile**（桌面版通常是 `desktop`）：
 
 ```bash
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.3.1
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.3.2
 ```
 
 本地安装包同理：
 
 ```bash
-dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.3.1.tgz
+dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.3.2.tgz
 ```
 
 **3. 完全退出并重新打开 DSH**（macOS `Cmd+Q`，Windows 从托盘退出；只关窗口不会重新加载插件）。不要额外启动第二个 web 服务。
@@ -94,9 +101,12 @@ RTK 装在非常规位置时，按下面任一方式指定即可（桌面版需�
 export RTK_BIN=/absolute/path/to/rtk        # macOS / Linux
 ```
 ```powershell
-# Windows：对 DSH 服务进程可见即可（用户级持久变量）
+# Windows：必须是注册表用户环境（DSH 不读 shell 配置），设置后完全重启 DSH
 [Environment]::SetEnvironmentVariable('RTK_BIN', 'C:\Users\<you>\.cargo\bin\rtk.exe', 'User')
+# 或：setx RTK_BIN "C:\Users\<you>\.cargo\bin\rtk.exe"
 ```
+
+> Windows 完整步骤（四种安装方式、自动发现清单、专有排障）见 [docs/windows.md](docs/windows.md)。
 
 ## 配置
 
