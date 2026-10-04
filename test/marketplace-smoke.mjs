@@ -27,6 +27,13 @@ for (const test of ["marketplace-smoke", "resolve", "runtime"]) {
 assert.match(readme, new RegExp(`## ${pkg.version.replaceAll(".", "\\.")}`), "README must document the current version");
 assert.match(readme, /autoDiscover|自动发现/, "README must document zero-config discovery");
 
+// Cross-platform claims must stay true in the source and the docs.
+assert.match(source, /pwsh/, "the plugin must know the Windows shell tool");
+assert.match(source, /win32/, "the plugin must branch on platform");
+assert.match(source, /\.exe/, "the Windows candidate list must name executable images");
+assert.match(readme, /Windows/, "README must document Windows support");
+assert.match(readme, /pwsh/, "README must name the Windows shell tool");
+
 assert.doesNotMatch(source, /\/Users\/Robbin|dsh-rtk-heartbeat/);
 
 

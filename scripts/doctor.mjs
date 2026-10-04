@@ -30,8 +30,29 @@ const say = (line = '') => { out.push(line); if (!asJson) console.log(line); };
 
 /** Running dsh host processes, with the settings the plugin would actually see. */
 function runningHosts() {
-  if (process.platform === 'win32') return [];
   try {
+    if (process.platform === 'win32') {
+      // `ps` does not exist on Windows; Win32_Process still reports the command line,
+      // though (unlike `ps eww`) it cannot expose the child's environment.
+      const listing = execFileSync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*dsh-desktop-host*' } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
+      ], { encoding: 'utf8', timeout: 20000 });
+      return listing
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => {
+          const [pid, command = ''] = line.split('\t');
+          return {
+            pid: Number.parseInt(pid, 10),
+            profile: /profiles[\\/]([^\s\\/]+)/.exec(command)?.[1] ?? null,
+            rtkBin: null,
+            disabled: null,
+          };
+        })
+        .filter((host) => Number.isFinite(host.pid));
+    }
     const listing = execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
     return listing
       .split('\n')
@@ -53,7 +74,26 @@ function runningHosts() {
       })
       .filter((host) => Number.isFinite(host.pid));
   } catch {
+    // A blocked or unavailable process listing must not turn into a false alarm.
     return [];
+  }
+}
+
+/** Whether one pid is still running; the status record is only evidence if it lives. */
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === 'win32') {
+    try {
+      return execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH'], { encoding: 'utf8', timeout: 10000 }).includes(String(pid));
+    } catch {
+      return true;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
   }
 }
 
@@ -123,20 +163,23 @@ const probes = DISCOVERY_CANDIDATES.map((candidate) => {
 const profiles = installedProfiles();
 const hosts = runningHosts();
 const status = readStatus();
+/** DSH disables tool-bash on Windows and tool-pwsh elsewhere; the plugin follows the same split. */
+const shellTool = process.platform === 'win32' ? 'pwsh' : 'bash';
 const profileNames = new Set(profiles.map((entry) => entry.profile));
 const hostUncovered = hosts.find((host) => host.profile !== null && !profileNames.has(host.profile)) ?? null;
 const hostDisabled = hosts.find((host) => host.disabled === '1' || host.disabled === 'true') ?? null;
 // The plugin writes the status file on every boot it participates in, so a record
-// whose pid is not among the running hosts is not evidence that *this* host loaded
-// it (it may be a stale record from a previous run, or a manual import).
+// is only evidence when its pid belongs to a host that is still running (matched
+// against the process listing where one exists, otherwise checked for liveness).
 const statusHost = status === null ? null : hosts.find((host) => host.pid === status.pid) ?? null;
-const statusIsStale = status !== null && hosts.length > 0 && statusHost === null;
-const runtimeSeen = hosts.length === 0 ? status !== null : statusHost !== null;
+const statusLive = status !== null && (hosts.length > 0 ? statusHost !== null : isProcessAlive(status.pid));
+const statusIsStale = status !== null && !statusLive;
+const runtimeSeen = statusLive;
 const ok = resolution.ok
   && profiles.some((entry) => entry.problems.length === 0)
   && hostUncovered === null
   && hostDisabled === null
-  && (hosts.length === 0 || runtimeSeen);
+  && runtimeSeen;
 
 if (asJson) {
   console.log(JSON.stringify({
@@ -150,8 +193,10 @@ if (asJson) {
     hosts,
     status,
     statusHostPid: statusHost?.pid ?? null,
+    statusLive,
     statusIsStale,
     runtimeSeen,
+    shellTool,
     ok,
   }, null, 2));
   process.exit(ok ? 0 : 1);
@@ -159,6 +204,7 @@ if (asJson) {
 
 say(`dsh-rtk doctor — v${pkg.version}`);
 say(`DSH_HOME: ${dshHome}   platform: ${process.platform}   node: ${process.version}`);
+say(`本平台加载的 shell 工具：${shellTool}（DSH 在 Windows 上用 pwsh，其他平台用 bash）`);
 say();
 say('[1] RTK 二进制（按本命令的环境解析）');
 if (resolution.ok) {
@@ -186,12 +232,14 @@ if (profiles.length === 0) {
 say();
 say('[3] 运行中的宿主进程');
 if (hosts.length === 0) {
-  say('    未发现 dsh-desktop-host 进程（CLI 启动的 dsh web / tui 的宿主进程不在统计内）');
+  const listing = process.platform === 'win32' ? 'Win32_Process 查询不可用' : 'ps 不可用或无匹配进程';
+  say(`    未发现 dsh-desktop-host 进程（${listing}；CLI 启动的 dsh web / tui 的宿主进程不在统计内）`);
 } else {
   for (const host of hosts) {
     const covered = host.profile === null || profileNames.has(host.profile);
     const blocked = host.disabled === '1' || host.disabled === 'true';
-    say(`    ${covered && !blocked ? '✅' : '❌'} pid ${host.pid}${host.profile === null ? '' : ` · profile ${host.profile}`} · RTK_BIN=${host.rtkBin ?? '（未设置）'}${blocked ? ` · DSH_RTK_DISABLE=${host.disabled}（本次进程已全局关闭改写）` : ''}`);
+    const environment = process.platform === 'win32' ? '（Windows 无法读取子进程环境）' : `RTK_BIN=${host.rtkBin ?? '（未设置）'}`;
+    say(`    ${covered && !blocked ? '✅' : '❌'} pid ${host.pid}${host.profile === null ? '' : ` · profile ${host.profile}`} · ${environment}${blocked ? ` · DSH_RTK_DISABLE=${host.disabled}（本次进程已全局关闭改写）` : ''}`);
   }
   if (hostUncovered !== null) {
     say(`    ⚠️  宿主用的 profile「${hostUncovered.profile}」没有安装 dsh-rtk，插件不会被加载`);
@@ -219,5 +267,5 @@ if (status === null) {
   }
 }
 say();
-say(ok ? '结论：配置就绪 —— 重启对应 profile 后 bash 命令会被 RTK 改写。' : '结论：还不能生效，按上面 ❌ 的提示修复。');
+say(ok ? `结论：配置就绪 —— 重启对应 profile 后 ${shellTool} 命令会被 RTK 改写。` : '结论：还不能生效，按上面 ❌ 的提示修复。');
 process.exit(ok ? 0 : 1);

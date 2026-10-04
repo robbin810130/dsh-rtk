@@ -1,16 +1,21 @@
 /**
- * Unit coverage for RTK resolution, diagnostics and the fail-open runtime.
- * No DSH runtime is required; `test/runtime.mjs` covers the hook contract.
+ * Unit coverage for RTK resolution, shell dialects, diagnostics and the
+ * fail-open runtime. Runs on macOS, Linux and Windows: the executable-facing
+ * parts go through an injected spawn, and the only real-process section is the
+ * POSIX-only smoke at the end. `test/runtime.mjs` covers the DSH hook contract.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   apply,
   createRtkRuntime,
+  createToolHook,
+  dialectForTool,
   DISCOVERY_CANDIDATES,
   inspectBinary,
+  platformCandidates,
   probeVersion,
   resolveRtkBin,
   rewriteWithRtk,
@@ -19,157 +24,221 @@ import {
 const root = mkdtempSync(join(tmpdir(), 'dsh-rtk-resolve-'));
 const saved = { bin: process.env.RTK_BIN, disabled: process.env.DSH_RTK_DISABLE, home: process.env.DSH_HOME };
 const logs = [];
+const log = (level, message) => logs.push({ level, message });
+/** A binary path that passes inspection on this platform, with no quote inside. */
+const OK_BIN = process.platform === 'win32' ? process.execPath : '/bin/sh';
+/** Same, but with a single quote in the file name so quoting is observable. */
+const QUOTED_BIN = join(root, process.platform === 'win32' ? "rtk'quoted.exe" : "rtk'quoted");
 
-/** Write an executable fake RTK. */
-function fakeBin(name, version, mode = 0o700) {
-  const path = join(root, name);
-  const body = version === null
-    ? '#!/bin/sh\nprintf "not-an-rtk\\n"\n'
-    : `#!/bin/sh\nif [ "$1" = "--version" ]; then printf "rtk ${version}\\n"; exit 0; fi\nprintf "%s" "rtk git status"\nexit "\${RTK_TEST_STATUS:-0}"\n`;
-  writeFileSync(path, body);
-  chmodSync(path, mode);
-  return path;
+/** Canned spawn: records calls and reports one fixed outcome. */
+function fakeSpawn(outcome = { status: 0, stdout: '', stderr: '' }) {
+  const calls = [];
+  const spawn = (bin, args, options) => {
+    calls.push({ bin, args, options });
+    return { status: null, stdout: '', stderr: '', error: undefined, ...outcome };
+  };
+  spawn.calls = calls;
+  return spawn;
 }
 
-function quoted(bin) {
-  return "'" + bin.replaceAll("'", "'\\''") + "'";
-}
+const ok3 = { status: 3, stdout: 'rtk git status\n' };
 
 try {
   delete process.env.RTK_BIN;
   delete process.env.DSH_RTK_DISABLE;
   process.env.DSH_HOME = join(root, 'dsh-home');
+  writeFileSync(QUOTED_BIN, 'fake');
+  chmodSync(QUOTED_BIN, 0o700);
 
-  const good = fakeBin('rtk-9.9.9', '9.9.9');
-  const other = fakeBin('rtk-1.1.1', '1.1.1');
-  const impostor = fakeBin('not-rtk', null);
-  const worldWritable = fakeBin('rtk-world', '9.9.9', 0o777);
-  const notExecutable = fakeBin('rtk-noexec', '9.9.9', 0o600);
-  const missing = join(root, 'absent', 'rtk');
+  // ── dialect routing (DSH ships bash on POSIX, pwsh on Windows) ──────────
+  assert.equal(dialectForTool('bash'), 'posix');
+  assert.equal(dialectForTool('pwsh'), 'powershell');
+  assert.equal(dialectForTool('powershell'), 'powershell');
+  assert.equal(dialectForTool('bash-persistent'), 'posix', 'persistent tools reuse the shell name but tolerate suffixes');
+  assert.equal(dialectForTool('pwsh-persistent'), 'powershell');
+  assert.equal(dialectForTool('fs'), null, 'non-shell tools must never be rewritten');
+  assert.equal(dialectForTool(undefined), null);
 
-  // ── probe + trust checks ────────────────────────────────────────────────
-  assert.equal(probeVersion(good), '9.9.9');
-  assert.equal(probeVersion(impostor), null, 'a binary that is not RTK must not pass the probe');
-  assert.equal(probeVersion(missing), null);
-  assert.equal(inspectBinary(good).ok, true);
-  assert.equal(inspectBinary('rtk').reason, '不是绝对路径');
-  assert.equal(inspectBinary(missing).reason, '不存在');
-  assert.equal(inspectBinary(impostor).ok, true, 'trust checks are about the file, not its identity');
-  assert.match(inspectBinary(worldWritable).reason, /world-writable/);
-  assert.equal(inspectBinary(notExecutable).reason, '没有执行权限');
-
-  // ── discovery ───────────────────────────────────────────────────────────
-  const discovered = resolveRtkBin({ config: {}, env: {}, candidates: [missing, impostor, good] });
-  assert.equal(discovered.ok, true, JSON.stringify(discovered));
-  assert.equal(discovered.bin, good);
-  assert.equal(discovered.source, 'discovered');
-  assert.equal(discovered.version, '9.9.9');
-  assert.equal(resolveRtkBin({ config: {}, env: {}, candidates: [missing, impostor] }).ok, false);
-  assert.match(resolveRtkBin({ config: {}, env: {}, candidates: [missing] }).checked.join(' '), /不存在/);
-  assert.match(resolveRtkBin({ config: {}, env: {}, candidates: [impostor] }).checked.join(' '), /不是 RTK/);
-  assert.equal(resolveRtkBin({ config: { autoDiscover: false }, env: {}, candidates: [good] }).ok, false);
-  assert.match(resolveRtkBin({ config: { autoDiscover: false }, env: {}, candidates: [good] }).hint, /autoDiscover/);
+  // ── platform candidates ─────────────────────────────────────────────────
+  for (const candidate of platformCandidates('win32')) {
+    assert.match(candidate, /\.exe$/, 'Windows candidates must name an executable image');
+  }
+  assert.equal(platformCandidates('win32').every((value) => /%[A-Za-z]+%/.test(value)), true, 'Windows candidates expand from environment variables');
+  assert.equal(platformCandidates('linux').some((value) => value === '/opt/homebrew/bin/rtk'), true);
+  assert.equal(platformCandidates('linux').some((value) => value.includes('linuxbrew')), true);
   assert.equal(DISCOVERY_CANDIDATES.length > 0, true);
 
-  // ── explicit settings are authoritative (no silent substitution) ─────────
-  assert.equal(resolveRtkBin({ config: {}, env: { RTK_BIN: good }, candidates: [] }).source, 'RTK_BIN');
-  assert.equal(resolveRtkBin({ config: { bin: other }, env: { RTK_BIN: good }, candidates: [] }).bin, other);
-  const brokenExplicit = resolveRtkBin({ config: {}, env: { RTK_BIN: missing }, candidates: [good] });
+  // ── trust checks ────────────────────────────────────────────────────────
+  assert.equal(inspectBinary(OK_BIN, process.env, process.platform).ok, true);
+  assert.equal(inspectBinary('rtk', process.env, 'linux').reason, '不是绝对路径');
+  assert.equal(inspectBinary(join(root, 'absent', 'rtk'), process.env, 'linux').reason, '不存在');
+
+  const windowsExe = join(root, 'rtk.exe');
+  writeFileSync(windowsExe, 'fake');
+
+  // POSIX mode/owner/executable-bit rules can only be exercised on a POSIX host:
+  // Windows ignores chmod's write bits and treats every existing file as executable.
+  if (process.platform !== 'win32') {
+    const worldWritable = join(root, 'rtk-world');
+    writeFileSync(worldWritable, 'fake');
+    chmodSync(worldWritable, 0o777);
+    const notExecutable = join(root, 'rtk-noexec');
+    writeFileSync(notExecutable, 'fake');
+    chmodSync(notExecutable, 0o600);
+    assert.match(inspectBinary(worldWritable, process.env, 'linux').reason, /world-writable/);
+    assert.equal(inspectBinary(notExecutable, process.env, 'linux').reason, '没有执行权限');
+    assert.equal(inspectBinary(windowsExe, process.env, 'linux').reason, '没有执行权限', 'a non-executable file is refused on POSIX');
+  }
+
+  const windowsShim = join(root, 'rtk.cmd');
+  writeFileSync(windowsShim, '@echo off\n');
+  assert.match(inspectBinary(windowsShim, process.env, 'win32').reason, /只接受 \.exe/, 'a .cmd shim must be refused rather than run through a shell');
+  assert.equal(inspectBinary(windowsExe, process.env, 'win32').ok, true);
+
+  assert.equal(inspectBinary('%ProgramFiles%\\rtk\\rtk.exe', { ProgramFiles: root }, 'win32').path, `${root}\\rtk\\rtk.exe`, 'Windows candidates expand %VAR% without touching separators');
+
+  // ── resolution precedence ───────────────────────────────────────────────
+  const probe = () => '9.9.9';
+  assert.equal(resolveRtkBin({ config: {}, env: { RTK_BIN: OK_BIN }, candidates: [], probe }).source, 'RTK_BIN');
+  assert.equal(resolveRtkBin({ config: {}, env: { rtk_bin: OK_BIN }, candidates: [], probe }).source, 'RTK_BIN', 'environment lookup is case-insensitive (Windows)');
+  assert.equal(resolveRtkBin({ config: { bin: QUOTED_BIN }, env: { RTK_BIN: OK_BIN }, candidates: [], probe }).bin, QUOTED_BIN);
+  const brokenExplicit = resolveRtkBin({ config: {}, env: { RTK_BIN: join(root, 'absent', 'rtk') }, candidates: [OK_BIN], probe });
   assert.equal(brokenExplicit.ok, false, 'a broken RTK_BIN must not silently fall back to another binary');
   assert.match(brokenExplicit.hint, /不会改写任何命令/);
-  assert.equal(resolveRtkBin({ config: {}, env: { RTK_BIN: 'rtk' }, candidates: [good] }).ok, false);
-  assert.equal(resolveRtkBin({ config: { bin: '~/rtk' }, env: {}, candidates: [] }).ok, false, '~ must expand, not pass through');
+  assert.equal(resolveRtkBin({ config: {}, env: { RTK_BIN: 'rtk' }, candidates: [OK_BIN], probe }).ok, false, 'a relative RTK_BIN is refused, never resolved through PATH');
+  const discovered = resolveRtkBin({ config: {}, env: {}, candidates: [join(root, 'absent', 'rtk'), OK_BIN], probe });
+  assert.equal(discovered.ok, true);
+  assert.equal(discovered.source, 'discovered');
+  assert.equal(discovered.version, '9.9.9');
+  assert.equal(resolveRtkBin({ config: { autoDiscover: false }, env: {}, candidates: [OK_BIN], probe }).ok, false);
+  assert.match(resolveRtkBin({ config: { autoDiscover: false }, env: {}, candidates: [OK_BIN], probe }).hint, /autoDiscover/);
+  assert.match(resolveRtkBin({ config: {}, env: {}, candidates: [join(root, 'absent', 'rtk')], probe }).checked.join(' '), /不存在/);
+  assert.match(resolveRtkBin({ config: {}, env: {}, platform: 'win32', candidates: [join(root, 'absent', 'rtk.exe')], probe }).hint, /rtk\.exe/, 'Windows guidance must name rtk.exe');
 
-  // ── runtime: rewrite, disable switches, status file ──────────────────────
-  const log = (level, message) => logs.push({ level, message });
-  const runtime = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: good }, log });
+  // ── runtime: dialect-aware rewriting ────────────────────────────────────
+  const spawn = fakeSpawn(ok3);
+  const runtime = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn, log });
   assert.equal(runtime.start().ok, true);
-  assert.equal(runtime.rewrite('git status').command, `${quoted(good)} git status`);
-  assert.equal(runtime.rewrite('ls -la').command, `${quoted(good)} git status`, 'the fake RTK always suggests git status');
-  assert.equal(runtime.rewrite('DSH_RTK_DISABLE=1 git status').command, 'DSH_RTK_DISABLE=1 git status');
+  assert.ok(logs.some((entry) => entry.message.includes('已生效')), 'activation must be logged');
+
+  const quoted = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: QUOTED_BIN }, spawn: fakeSpawn(ok3), log });
+  quoted.start();
+  const posixQuoted = quoted.rewrite('git status', 'posix').command;
+  const powershellQuoted = quoted.rewrite('git status', 'powershell').command;
+  assert.equal(posixQuoted, "'" + QUOTED_BIN.replaceAll("'", "'\\''") + "' git status", "POSIX shells escape a quote as '\\''");
+  assert.equal(powershellQuoted, "'" + QUOTED_BIN.replaceAll("'", "''") + "' git status", 'PowerShell escapes a quote by doubling it');
+  assert.notEqual(posixQuoted, powershellQuoted);
+
+  assert.equal(runtime.rewrite('git status').command, "'" + OK_BIN + "' git status");
+  assert.equal(runtime.rewrite('git status', 'powershell').command, "'" + OK_BIN + "' git status");
+  assert.equal(runtime.rewrite('DSH_RTK_DISABLE=1 git status', 'posix').command, 'DSH_RTK_DISABLE=1 git status');
+  assert.equal(runtime.rewrite("$env:DSH_RTK_DISABLE='1'; git status", 'powershell').command, "$env:DSH_RTK_DISABLE='1'; git status");
   assert.equal(runtime.rewrite('   ').command, '   ');
-  const blocked = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: good, DSH_RTK_DISABLE: '1' }, log });
+  assert.equal(spawn.calls[0].args[0], 'rewrite');
+  assert.equal(spawn.calls[0].options.windowsHide, true);
+  assert.equal(runtime.snapshot().rewrites, 2, 'only the two rewritable calls count; opt-outs do not');
+
+  const blocked = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN, DSH_RTK_DISABLE: '1' }, spawn: fakeSpawn(ok3), log });
   assert.equal(blocked.rewrite('git status').command, 'git status');
-  assert.equal(runtime.snapshot().rewrites, 2);
-  assert.ok(logs.some((entry) => entry.level === 'info' && entry.message.includes('已生效')), 'activation must be logged');
 
-  const broken = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: missing }, log });
-  broken.start();
-  assert.ok(logs.some((entry) => entry.level === 'warn' && entry.message.includes('未生效')), 'a missing binary must warn');
+  // ── runtime: "no RTK equivalent" is normal, unexpected failures are not ──
+  const passthrough = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn: fakeSpawn({ status: 1, stdout: '' }), log });
+  passthrough.start();
+  const before = logs.length;
+  assert.equal(passthrough.rewrite('echo hi').command, 'echo hi');
+  assert.equal(passthrough.rewrite('echo hi').reason, 'no-equivalent');
+  assert.equal(logs.length, before, '"exit 1 / no output" must not be reported as a failure');
+  assert.equal(passthrough.snapshot().passthrough, 2);
+  assert.equal(passthrough.snapshot().skipped, 0);
+
+  const failing = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn: fakeSpawn({ status: 2, stdout: 'rtk git status' }), log });
+  failing.start();
+  assert.equal(failing.rewrite('git status').command, 'git status');
   const warnings = logs.filter((entry) => entry.level === 'warn').length;
-  broken.rewrite('git status');
-  broken.rewrite('git status');
+  failing.rewrite('git status');
   assert.equal(logs.filter((entry) => entry.level === 'warn').length, warnings, 'the same failure must be reported once');
+  assert.equal(failing.snapshot().skipped, 2);
 
-  // ── runtime: "no RTK equivalent" is a normal path, not a failure ─────────
-  const silent = join(root, 'rtk-silent');
-  writeFileSync(silent, '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "rtk 9.9.9\\n"; exit 0; fi\nexit 1\n');
-  chmodSync(silent, 0o700);
-  const quiet = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: silent }, log });
-  quiet.start();
-  const quietLogs = logs.length;
-  assert.equal(quiet.rewrite('echo hi').command, 'echo hi');
-  assert.equal(quiet.rewrite('echo hi').reason, 'no-equivalent');
-  assert.equal(logs.length, quietLogs, '"exit 1 / no output" must not be reported as a failure');
-  assert.equal(quiet.snapshot().passthrough, 2);
-  assert.equal(quiet.snapshot().rewrites, 0);
-  assert.equal(quiet.snapshot().skipped, 0);
+  // A vanished binary invalidates the cache instead of failing forever.
+  const goneSpawn = fakeSpawn({ status: null, stdout: '', error: { code: 'ENOENT', message: 'spawn rtk ENOENT' } });
+  const liveBin = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn: goneSpawn, log });
+  liveBin.start();
+  assert.equal(liveBin.rewrite('git status').command, 'git status');
+  assert.equal(liveBin.snapshot().active, false);
+  assert.match(liveBin.snapshot().lastError.reason, /ENOENT|无法启动/);
+  const missingBin = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: join(root, 'absent', 'rtk') }, candidates: [], spawn: goneSpawn, log });
+  assert.equal(missingBin.start().ok, false);
 
-  const statusDir = join(root, 'dsh-home');
-  const statused = createRtkRuntime({ config: {}, env: { RTK_BIN: good, DSH_HOME: statusDir }, log });
+  // ── status file ─────────────────────────────────────────────────────────
+  const statusDir = join(root, 'status-home');
+  const statused = createRtkRuntime({ config: {}, env: { RTK_BIN: OK_BIN, DSH_HOME: statusDir }, spawn: fakeSpawn(ok3), log });
   statused.start();
   const statusPath = join(statusDir, 'dsh-rtk', 'status.json');
   assert.equal(statused.statusPath, statusPath);
   assert.equal(existsSync(statusPath), true, 'the status file makes a live install verifiable');
   const status = JSON.parse(readFileSync(statusPath, 'utf8'));
   assert.equal(status.active, true);
-  assert.equal(status.bin, good);
+  assert.equal(status.bin, OK_BIN);
   assert.equal(status.pid, process.pid);
+  assert.equal(status.platform, process.platform);
 
-  // ── runtime: a vanished binary is re-discovered instead of failing forever ─
-  const vanishing = fakeBin('rtk-vanishing', '9.9.9');
-  const survivor = fakeBin('rtk-survivor', '0.0.1');
-  const live = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: vanishing }, candidates: [], log });
-  live.start();
-  assert.equal(live.rewrite('git status').command, `${quoted(vanishing)} git status`);
-  unlinkSync(vanishing);
-  assert.equal(live.rewrite('git status').command, 'git status', 'a vanished binary falls back to the original command');
-  assert.equal(live.snapshot().active, false);
-  assert.match(live.snapshot().lastError.reason, /ENOENT|无法启动/);
-  const rediscovered = createRtkRuntime({ config: { statusFile: false }, env: {}, candidates: [survivor], log });
-  assert.equal(rediscovered.start().bin, survivor);
-
-  // ── legacy one-shot helper ──────────────────────────────────────────────
-  process.env.RTK_BIN = good;
-  assert.equal(rewriteWithRtk('git status'), `${quoted(good)} git status`);
+  // ── legacy one-shot helper (positive case needs a real binary; see below) ─
   process.env.RTK_BIN = 'rtk';
-  assert.equal(rewriteWithRtk('git status'), 'git status', 'a relative RTK_BIN is refused, never resolved through PATH');
+  assert.equal(rewriteWithRtk('git status'), 'git status', 'a relative RTK_BIN is refused');
+  process.env.RTK_BIN = join(root, 'absent', 'rtk');
+  assert.equal(rewriteWithRtk('git status'), 'git status');
   delete process.env.RTK_BIN;
 
-  // ── apply(): hook wiring against a mock cordis context ───────────────────
+  // ── hook wiring against a mock cordis context ───────────────────────────
   const handlers = new Map();
-  const ctx = {
+  const mockCtx = {
     logger: { info: (m) => logs.push({ level: 'info', message: m }), warn: (m) => logs.push({ level: 'warn', message: m }), error: (m) => logs.push({ level: 'error', message: m }) },
     on: (event, handler) => { handlers.set(event, handler); },
   };
-  apply(ctx, { bin: good });
+  // A missing explicit binary keeps the hook spawn-free while still exercising it.
+  apply(mockCtx, { bin: join(root, 'absent', 'rtk'), autoDiscover: false });
   const hook = handlers.get('tools/execute');
   assert.equal(typeof hook, 'function');
   const exec = { name: 'bash', arguments: Object.freeze({ command: 'git status', workdir: '/tmp' }), signal: { aborted: false } };
-  let seen;
-  await hook(exec, async () => { seen = exec.arguments.command; return 'ok'; });
-  assert.equal(seen, `${quoted(good)} git status`);
-  assert.equal(exec.arguments.command, 'git status', 'the frozen argument snapshot is restored after dispatch');
-  let otherSeen;
-  const otherExec = { name: 'fs', arguments: { command: 'git status' }, signal: { aborted: false } };
-  await hook(otherExec, async () => { otherSeen = otherExec.arguments.command; return 'ok'; });
-  assert.equal(otherSeen, 'git status');
+  assert.equal(await hook(exec, async () => 'ok'), 'ok');
+  assert.equal(exec.arguments.command, 'git status');
+
+  const hookRuntime = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn: fakeSpawn(ok3), log });
+  hookRuntime.start();
+  const wired = createToolHook(hookRuntime);
+  let bashSeen;
+  const bashExec = { name: 'bash', arguments: Object.freeze({ command: 'git status' }), signal: { aborted: false } };
+  await wired(bashExec, async () => { bashSeen = bashExec.arguments.command; return 'ok'; });
+  assert.equal(bashSeen, "'" + OK_BIN + "' git status");
+  assert.equal(bashExec.arguments.command, 'git status', 'the frozen argument snapshot is restored after dispatch');
+  let pwshSeen;
+  const pwshExec = { name: 'pwsh', arguments: Object.freeze({ command: 'git status' }), signal: { aborted: false } };
+  await wired(pwshExec, async () => { pwshSeen = pwshExec.arguments.command; return 'ok'; });
+  assert.equal(pwshSeen, "'" + OK_BIN + "' git status", 'the same hook must serve the Windows shell tool');
+  const fsExec = { name: 'fs', arguments: { command: 'git status' }, signal: { aborted: false } };
+  await wired(fsExec, async () => 'ok');
+  assert.equal(fsExec.arguments.command, 'git status');
 
   const disabledHandlers = new Map();
   apply({ logger: console, on: (event, handler) => { disabledHandlers.set(event, handler); } }, { enabled: false });
   assert.equal(disabledHandlers.size, 0, 'enabled: false must not install a hook');
 
-  console.log('Resolution, diagnostics and fail-open runtime checks passed.');
+  // ── POSIX-only: the real spawn path against a real script ───────────────
+  if (process.platform !== 'win32') {
+    const script = join(root, 'rtk-real');
+    writeFileSync(script, '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "rtk 9.9.9\\n"; exit 0; fi\nprintf "%s" "rtk git status"\nexit "${RTK_TEST_STATUS:-0}"\n');
+    chmodSync(script, 0o700);
+    assert.equal(probeVersion(script), '9.9.9');
+    const real = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: script }, log });
+    assert.equal(real.start().version, '9.9.9');
+    assert.equal(real.rewrite('git status').command, `'${script}' git status`);
+    assert.equal(inspectBinary(script).ok, true, 'an executable user-owned script is trusted on POSIX');
+    process.env.RTK_BIN = script;
+    assert.equal(rewriteWithRtk('git status'), `'${script}' git status`, 'the legacy helper rewrites with a real binary too');
+    delete process.env.RTK_BIN;
+  }
+
+  console.log('Resolution, dialect, diagnostics and fail-open runtime checks passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });
   for (const [key, value] of [['RTK_BIN', saved.bin], ['DSH_RTK_DISABLE', saved.disabled], ['DSH_HOME', saved.home]]) {
