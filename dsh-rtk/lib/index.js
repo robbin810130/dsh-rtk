@@ -35,6 +35,7 @@ import {
   accessSync,
   constants as fsConstants,
   mkdirSync,
+  readFileSync,
   realpathSync,
   statSync,
   writeFileSync,
@@ -45,6 +46,19 @@ import z from 'schemastery';
 
 export const name = 'dsh-rtk';
 export const inject = [];
+
+/**
+ * This package's version, read from the manifest that sits beside the entry
+ * point. Recorded in the status file so `doctor` can tell "the installed version
+ * is running" apart from "the previous version is still running".
+ */
+const PLUGIN_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version ?? null;
+  } catch {
+    return null;
+  }
+})();
 
 export const Config = z.object({
   /** Master switch; `false` keeps the plugin installed but inert. */
@@ -377,6 +391,7 @@ export function createRtkRuntime(options = {}) {
       mkdirSync(dirname(statusPath), { recursive: true });
       writeFileSync(statusPath, JSON.stringify({
         plugin: 'dsh-rtk',
+        pluginVersion: PLUGIN_VERSION,
         pid: process.pid,
         profile: profileName(),
         platform,

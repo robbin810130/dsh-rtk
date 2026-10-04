@@ -17,6 +17,11 @@
 
 `.github/workflows/ci.yml` 在 ubuntu / macos / windows 三平台 × Node 22/24 上跑 `npm test`。
 
+## 1.3.1：升级后不再谎报"已生效"
+
+- 状态文件新增 `pluginVersion`；`doctor` 把它与 profile 里**实际安装**的版本比对：运行中的宿主仍是旧版本时报 ❌「加载的是 vX，已安装 vY → 重启后生效」。
+- 对 1.3.1 之前的旧记录（无版本标记）退化为时间判据：宿主启动时间早于本次安装时间同样报 ❌，不再把"旧进程还活着"当成生效证据。
+
 ## 1.3.0：多平台
 
 - **修掉 Windows 上完全不触发的问题**：此前钩子只认 `exec.name === 'bash'`，而 Windows 上 DSH 根本不注册 `bash`（注册的是 `pwsh`），插件没有任何触发机会。现在按方言匹配 `bash`/`sh`/`pwsh`/`powershell` 及带前后缀的变体。
@@ -60,13 +65,13 @@ where.exe rtk
 **2. 装插件到正在使用的 profile**（桌面版通常是 `desktop`）：
 
 ```bash
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.3.0
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.3.1
 ```
 
 本地安装包同理：
 
 ```bash
-dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.3.0.tgz
+dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.3.1.tgz
 ```
 
 **3. 完全退出并重新打开 DSH**（macOS `Cmd+Q`，Windows 从托盘退出；只关窗口不会重新加载插件）。不要额外启动第二个 web 服务。

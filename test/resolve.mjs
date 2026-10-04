@@ -181,6 +181,8 @@ try {
   assert.equal(status.bin, OK_BIN);
   assert.equal(status.pid, process.pid);
   assert.equal(status.platform, process.platform);
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(status.pluginVersion, manifest.version, 'the record must name the running plugin version so doctor can spot a stale host');
 
   // ── legacy one-shot helper (positive case needs a real binary; see below) ─
   process.env.RTK_BIN = 'rtk';

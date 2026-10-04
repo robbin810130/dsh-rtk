@@ -13,7 +13,7 @@
  * Usage: node scripts/doctor.mjs [--bin=/abs/path/to/rtk] [--json]
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DISCOVERY_CANDIDATES, inspectBinary, probeVersion, resolveRtkBin } from '../dsh-rtk/lib/index.js';
@@ -174,7 +174,29 @@ const hostDisabled = hosts.find((host) => host.disabled === '1' || host.disabled
 const statusHost = status === null ? null : hosts.find((host) => host.pid === status.pid) ?? null;
 const statusLive = status !== null && (hosts.length > 0 ? statusHost !== null : isProcessAlive(status.pid));
 const statusIsStale = status !== null && !statusLive;
-const runtimeSeen = statusLive;
+// A live pid is not enough after an upgrade: the running host may still hold the
+// previous version in memory while the profile already carries a newer one.
+const installedForHost = status?.profile == null ? null : profiles.find((entry) => entry.profile === status.profile)?.installedVersion ?? null;
+const statusIsOutdated = statusLive
+  && typeof status.pluginVersion === 'string'
+  && installedForHost !== null
+  && status.pluginVersion !== installedForHost;
+// Records written before 1.3.1 carry no version, so fall back to "was this host
+// started before the installed package was written?".
+const hostManifest = status?.profile == null ? null : join(dshHome, 'profiles', status.profile, 'node_modules', 'dsh-rtk', 'package.json');
+let installedAt = null;
+try {
+  installedAt = hostManifest !== null && existsSync(hostManifest) ? statSync(hostManifest).mtimeMs : null;
+} catch {
+  installedAt = null;
+}
+const statusStartedMs = status === null ? null : Date.parse(status.startedAt);
+const statusPredatesInstall = statusLive
+  && typeof status.pluginVersion !== 'string'
+  && installedAt !== null
+  && Number.isFinite(statusStartedMs)
+  && statusStartedMs < installedAt;
+const runtimeSeen = statusLive && !statusIsOutdated && !statusPredatesInstall;
 const ok = resolution.ok
   && profiles.some((entry) => entry.problems.length === 0)
   && hostUncovered === null
@@ -195,6 +217,11 @@ if (asJson) {
     statusHostPid: statusHost?.pid ?? null,
     statusLive,
     statusIsStale,
+    statusIsOutdated,
+    statusPredatesInstall,
+    installedAt,
+    statusPluginVersion: status?.pluginVersion ?? null,
+    installedForHost,
     runtimeSeen,
     shellTool,
     ok,
@@ -259,8 +286,17 @@ if (status === null) {
 } else if (statusIsStale) {
   say(`    ❌ 状态文件来自 pid ${status.pid}（${status.updatedAt}），不在当前运行中的宿主里 —— 可能是上一次运行或手动执行插件留下的`);
   say('       重启 DSH 后再看这里，才是本次运行的真实状态');
+} else if (statusIsOutdated) {
+  say(`    ❌ 运行中的宿主（pid ${status.pid}）加载的是 v${status.pluginVersion}，而 profile ${status.profile ?? ''} 里已安装 v${installedForHost}`);
+  say('       完全退出并重开 DSH 后，新版本才会生效');
+} else if (statusPredatesInstall) {
+  say(`    ❌ 运行中的宿主（pid ${status.pid}）启动于 ${status.startedAt}，早于本次安装（${new Date(installedAt).toISOString()}）`);
+  say('       该记录不含版本标记（1.3.1 之前），无法确认运行的就是已安装的版本 → 完全退出并重开 DSH，再跑一次即可精确核对');
 } else {
-  say(`    最近一次插件记录：${status.updatedAt} · active=${status.active} · ${status.bin ?? status.reason ?? 'n/a'} · 改写 ${status.rewrites} 次${status.passthrough === undefined ? '' : ` · 无等价命令 ${status.passthrough} 次`} · profile ${status.profile ?? '(未知)'}${statusHost === null ? '' : '（宿主 pid 匹配）'}`);
+  say(`    最近一次插件记录：v${typeof status.pluginVersion === 'string' ? status.pluginVersion : '（未标记版本，来自 1.3.1 之前）'} · ${status.updatedAt} · active=${status.active} · ${status.bin ?? status.reason ?? 'n/a'} · 改写 ${status.rewrites} 次${status.passthrough === undefined ? '' : ` · 无等价命令 ${status.passthrough} 次`} · profile ${status.profile ?? '(未知)'}${statusHost === null ? '' : '（宿主 pid 匹配）'}`);
+  if (status.pluginVersion === undefined) {
+    say('       提示：该记录不含版本标记（1.3.1 之前），升级并重启后即可核对「运行中的版本」与「已安装的版本」是否一致');
+  }
   if (status.lastError != null) say(`    最近错误：${status.lastError.reason}（${status.lastError.at}）`);
   if (status.active !== true && typeof status.hint === 'string') {
     for (const line of status.hint.split('\n')) say(`    ${line}`);
