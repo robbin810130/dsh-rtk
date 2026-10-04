@@ -225,6 +225,56 @@ try {
   apply({ logger: console, on: (event, handler) => { disabledHandlers.set(event, handler); } }, { enabled: false });
   assert.equal(disabledHandlers.size, 0, 'enabled: false must not install a hook');
 
+  // ── /rtk command ────────────────────────────────────────────────────────
+  /** A mock command service: `inject` runs the callback only when asked for `commands`. */
+  const registrations = [];
+  const commandCtx = {
+    logger: console,
+    on: () => {},
+    inject: (deps, callback) => {
+      if (!deps.includes('commands')) return;
+      callback({ commands: { register: (definition) => { registrations.push(definition); return () => {}; } } });
+    },
+  };
+  apply(commandCtx, { bin: QUOTED_BIN });
+  assert.equal(registrations.length, 1, 'exactly one command is registered');
+  const [definition] = registrations;
+  assert.equal(definition.name, 'rtk');
+  assert.equal(typeof definition.description, 'string');
+  assert.equal(definition.description.length > 0, true);
+  assert.equal(typeof definition.input?.hint, 'string', 'the registry rejects an empty or missing hint object');
+  assert.equal(definition.input.hint.trim().length > 0, true);
+
+  const statusReply = definition.handler({ rawInput: '' });
+  assert.equal(statusReply.kind, 'success');
+  assert.match(statusReply.text, /dsh-rtk/);
+  assert.match(statusReply.text, /已生效/);
+  assert.match(statusReply.text, /改写 \d+ 次/, 'status must report counters');
+  assert.equal(definition.handler({ rawInput: 'status' }).kind, 'success');
+  assert.equal(definition.handler({ rawInput: '  ' }).kind, 'success');
+  const recheckReply = definition.handler({ rawInput: 'RECHECK' });
+  assert.equal(recheckReply.kind, 'success', 'recheck on a healthy runtime succeeds');
+  assert.match(recheckReply.text, /已重新探测/);
+  const usageReply = definition.handler({ rawInput: 'nonsense' });
+  assert.equal(usageReply.kind, 'error');
+  assert.match(usageReply.text, /用法/);
+
+  // A runtime with no usable RTK reports the reason instead of a bare failure.
+  const brokenRegistrations = [];
+  apply({
+    logger: console,
+    on: () => {},
+    inject: (_deps, callback) => callback({ commands: { register: (entry) => { brokenRegistrations.push(entry); return () => {}; } } }),
+  }, { bin: join(root, 'absent', 'rtk'), autoDiscover: false });
+  const brokenReply = brokenRegistrations[0].handler({ rawInput: '' });
+  assert.equal(brokenReply.kind, 'success', 'reporting a broken state is still a successful command');
+  assert.match(brokenReply.text, /未生效/);
+  assert.match(brokenReply.text, /RTK 没有找到|不可用/, 'the reply must carry the actionable reason');
+  assert.equal(brokenRegistrations[0].handler({ rawInput: 'recheck' }).kind, 'error', 'recheck that still fails is an error');
+
+  // Profiles without the command service must stay silent instead of throwing.
+  apply({ logger: console, on: () => {} }, { bin: OK_BIN });
+
   // ── POSIX-only: the real spawn path against a real script ───────────────
   if (process.platform !== 'win32') {
     const script = join(root, 'rtk-real');

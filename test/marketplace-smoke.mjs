@@ -42,6 +42,11 @@ assert.match(windowsDoc, /setx/, "the guide must document the registry-backed us
 assert.match(windowsDoc, /\$PROFILE/, "the guide must warn that a PowerShell profile is ignored by DSH");
 assert.match(windowsDoc, /\.cmd/, "the guide must explain why .cmd wrappers are refused");
 assert.match(windowsDoc, /rtk\.exe/, "the guide must name the Windows executable");
+assert.match(windowsDoc, /\/rtk/, "the guide must document the in-session self-check command");
+
+// The in-session self-check must stay wired to the command registry and documented.
+assert.match(source, /commands\.register/, "the plugin must register its /rtk self-check");
+assert.match(readme, /\/rtk recheck/, "README must document the recheck subcommand");
 
 assert.doesNotMatch(source, /\/Users\/Robbin|dsh-rtk-heartbeat/);
 

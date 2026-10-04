@@ -15,6 +15,7 @@ const load = (name) => import(host ? new URL('@deepseek-ai/' + name + '/lib/inde
 const { Context } = await load('cordis');
 const { SystemPrompt } = await load('dsh-system-prompt');
 const { ToolRuntime, defineTool } = await load('dsh-tools');
+const { default: Commands } = await load('dsh-commands');
 import { apply, createRtkRuntime, createToolHook, rewriteWithRtk } from '../dsh-rtk/lib/index.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'rtk-test-'));
@@ -147,7 +148,27 @@ try {
     }
   }
 
-  console.log('DSH 0.2.0-rc.2 runtime integration passed (bash + pwsh, policy, opt-out, restore, disposal).');
+  // ── real command registry: definition validity + disposal ───────────────
+  {
+    const ctx = new Context();
+    try {
+      await ctx.plugin(SystemPrompt);
+      await ctx.plugin(Commands);
+      const plugin = await ctx.plugin({ apply }, { bin: OK_BIN });
+      const descriptors = ctx.commands.list(undefined);
+      const rtk = descriptors.find((entry) => entry.name === 'rtk');
+      assert.ok(rtk, `the real registry must accept the /rtk definition (got ${descriptors.map((entry) => entry.name).join(', ') || 'none'})`);
+      assert.equal(typeof rtk.description, 'string');
+      assert.equal(typeof rtk.input?.hint, 'string', 'the hint survives normalization');
+      // The command service is optional: without it the plugin must still load.
+      await plugin.dispose();
+      ctx.commands.list(undefined).forEach((entry) => assert.notEqual(entry.name, 'rtk'));
+    } finally {
+      await ctx.fiber.dispose();
+    }
+  }
+
+  console.log('DSH 0.2.0-rc.2 runtime integration passed (bash + pwsh, policy, opt-out, restore, disposal, /rtk).');
 } finally {
   rmSync(directory, { recursive: true, force: true });
   for (const [key, value] of [['RTK_BIN', saved.bin], ['DSH_RTK_DISABLE', saved.disabled], ['DSH_HOME', saved.home]]) {

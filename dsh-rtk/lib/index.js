@@ -87,6 +87,9 @@ const STATUS_FLUSH_MS = 30_000;
 const ACCEPTED_STATUS = [0, 3];
 /** RTK's documented "this command has no RTK equivalent" status; not a failure. */
 const NO_SUGGESTION_STATUS = 1;
+/** Human `/rtk` self-check command, shown in the session without creating a model message. */
+const COMMAND_NAME = 'rtk';
+const COMMAND_USAGE = '用法：/rtk [status|recheck]\n  status  （默认）显示当前状态\n  recheck 重新探测 RTK（刚装好 rtk 又不想重启 DSH 时用）';
 
 /** Shell dialects: how to quote a path, how the user opts out per command, where a command starts. */
 const DIALECTS = {
@@ -539,22 +542,38 @@ export function createRtkRuntime(options = {}) {
     return found;
   }
 
+  /**
+   * Drop the cached resolution and probe again — lets a user who installed RTK
+   * after DSH started pick it up without restarting the app.
+   */
+  function recheck() {
+    state.resolution = null;
+    state.resolvedAt = 0;
+    const found = resolution();
+    flush(true);
+    return found;
+  }
+
   return {
     config,
     start,
+    recheck,
     rewrite,
     resolution,
     invalidate,
     statusPath,
     state,
-    /** Snapshot for `npm run doctor` and tests. */
+    /** Snapshot for `/rtk`, `npm run doctor` and tests. */
     snapshot: () => ({
       active: state.resolution?.ok === true,
       bin: state.resolution?.bin ?? null,
       source: state.resolution?.source ?? null,
       version: state.resolution?.version ?? null,
+      pluginVersion: PLUGIN_VERSION,
       platform,
+      timeoutMs,
       reason: state.resolution?.ok === true ? null : state.resolution?.reason ?? null,
+      hint: state.resolution?.ok === true ? null : state.resolution?.hint ?? null,
       rewrites: state.rewrites,
       skipped: state.skipped,
       passthrough: state.passthrough,
@@ -562,6 +581,57 @@ export function createRtkRuntime(options = {}) {
       statusPath,
     }),
   };
+}
+
+/** The `/rtk` reply: what is active, what has been rewritten, and how to opt out. */
+export function formatStatus(runtime) {
+  const snapshot = runtime.snapshot();
+  const config = runtime.config ?? {};
+  const shellTool = snapshot.platform === 'win32' ? 'pwsh' : 'bash';
+  const dialect = defaultDialect(snapshot.platform) === 'powershell' ? 'PowerShell' : 'POSIX';
+  const lines = [`dsh-rtk ${snapshot.pluginVersion ?? '?'} · ${snapshot.platform} · 挂载 ${shellTool} 工具（${dialect} 引用）`];
+  if (snapshot.active) {
+    const version = snapshot.version === null ? '版本未知' : `rtk ${snapshot.version}`;
+    lines.push(`状态：已生效 —— ${version} @ ${snapshot.bin}（来源：${snapshot.source}）`);
+  } else {
+    lines.push(`状态：未生效 —— ${snapshot.reason ?? '未知原因'}`);
+    if (typeof snapshot.hint === 'string') lines.push(...snapshot.hint.split('\n').filter((line) => line.length > 0));
+  }
+  lines.push(`改写 ${snapshot.rewrites} 次 · 无等价命令 ${snapshot.passthrough} 次 · 未改写 ${snapshot.skipped} 次`);
+  lines.push(`配置：autoDiscover=${config.autoDiscover !== false} bin=${String(config.bin ?? '').length > 0 ? config.bin : '（未设置）'} timeoutMs=${snapshot.timeoutMs} verbose=${config.verbose === true} statusFile=${config.statusFile !== false}`);
+  if (snapshot.statusPath !== null) lines.push(`状态文件：${snapshot.statusPath}`);
+  if (snapshot.lastError !== null) lines.push(`最近错误：${snapshot.lastError.reason}（${snapshot.lastError.at}）`);
+  if (snapshot.active) {
+    lines.push(snapshot.platform === 'win32'
+      ? "临时跳过改写：$env:DSH_RTK_DISABLE='1'; <命令>"
+      : '临时跳过改写：DSH_RTK_DISABLE=1 <命令>');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Register `/rtk` when the profile composes the human-command service. The
+ * service is optional, so the plugin stays silent in command-less profiles.
+ */
+function registerCommands(ctx, runtime) {
+  if (typeof ctx.inject !== 'function') return;
+  ctx.inject(['commands'], (commandCtx) => {
+    commandCtx.commands.register({
+      name: COMMAND_NAME,
+      description: '查看 dsh-rtk 状态（RTK 路径/版本/改写计数），或重新探测 RTK',
+      input: { hint: '[status|recheck]' },
+      handler: (invocation) => {
+        const input = String(invocation?.rawInput ?? '').trim().toLowerCase();
+        if (input === 'recheck') {
+          const found = runtime.recheck();
+          const header = found.ok ? '已重新探测 RTK。' : '重新探测后仍未找到可用的 RTK。';
+          return { kind: found.ok ? 'success' : 'error', text: `${header}\n${formatStatus(runtime)}` };
+        }
+        if (input === '' || input === 'status') return { kind: 'success', text: formatStatus(runtime) };
+        return { kind: 'error', text: COMMAND_USAGE };
+      },
+    });
+  });
 }
 
 /**
@@ -639,9 +709,10 @@ export function apply(ctx, config = {}) {
   runtime.start();
 
   ctx.on('tools/execute', createToolHook(runtime));
+  registerCommands(ctx, runtime);
 
   if (settings.verbose === true) {
     const tools = Object.values(DIALECTS).flatMap((dialect) => dialect.shells).join('/');
-    emit(ctx, 'info', `[dsh-rtk] tools/execute hook registered（匹配 shell 工具：${tools}）`);
+    emit(ctx, 'info', `[dsh-rtk] tools/execute hook registered（匹配 shell 工具：${tools}），/rtk 可用`);
   }
 }

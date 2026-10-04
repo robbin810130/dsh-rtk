@@ -19,39 +19,41 @@
 
 `.github/workflows/ci.yml` 在 ubuntu / macos / windows 三平台 × Node 22/24 上跑 `npm test`。
 
-## 1.3.2：Windows 使用说明
+## 1.4.0：会话内自检 `/rtk`
 
-- 新增 [docs/windows.md](docs/windows.md)：RTK 在 Windows 的四种安装方式与落点、自动发现清单、`setx` 与 profile 配置两种显式指定方式、重启验证步骤，以及「`$PROFILE` 无效」「`.cmd` 被拒」「路径含空格」等 Windows 专有排障。
-- 说明文档随包发布（`files` 增加 `docs/windows.md`）。
+不用退出重开、也不用翻日志，直接在会话里打一条命令：
 
-## 1.3.1：升级后不再谎报"已生效"
+```
+/rtk              # 当前状态（默认）
+/rtk status       # 同上
+/rtk recheck      # 丢弃缓存重新探测 RTK —— 刚装好 rtk、又不想重启 DSH 时用
+```
 
-- 状态文件新增 `pluginVersion`；`doctor` 把它与 profile 里**实际安装**的版本比对：运行中的宿主仍是旧版本时报 ❌「加载的是 vX，已安装 vY → 重启后生效」。
-- 对 1.3.1 之前的旧记录（无版本标记）退化为时间判据：宿主启动时间早于本次安装时间同样报 ❌，不再把"旧进程还活着"当成生效证据。
+输出示例：
 
-## 1.3.0：多平台
+```
+dsh-rtk 1.4.0 · darwin · 挂载 bash 工具（POSIX 引用）
+状态：已生效 —— rtk 0.51.0 @ /opt/homebrew/bin/rtk（来源：discovered）
+改写 12 次 · 无等价命令 3 次 · 未改写 0 次
+配置：autoDiscover=true bin=（未设置） timeoutMs=3000 verbose=false statusFile=true
+状态文件：/Users/<you>/.dsh/dsh-rtk/status.json
+临时跳过改写：DSH_RTK_DISABLE=1 <命令>
+```
 
-- **修掉 Windows 上完全不触发的问题**：此前钩子只认 `exec.name === 'bash'`，而 Windows 上 DSH 根本不注册 `bash`（注册的是 `pwsh`），插件没有任何触发机会。现在按方言匹配 `bash`/`sh`/`pwsh`/`powershell` 及带前后缀的变体。
-- **按 shell 引用二进制路径**：PowerShell 的单引号转义规则是 `''`，POSIX 是 `'\''`；此前统一用 POSIX 规则，在 pwsh 下会拼出非法命令。
-- **平台化候选路径与可信校验**：Windows 候选为 `%USERPROFILE%\.cargo\bin\rtk.exe`、winget Links、scoop shims、`C:\ProgramData\chocolatey\bin`、`C:\Program Files\rtk`；Windows 下改用「必须是 `.exe`/`.com`」判定，不再套用 POSIX 权限位（Windows 上每个文件都像 world-writable，旧逻辑会把所有候选全部拒掉）。
-- **环境变量按大小写不敏感读取**（Windows 常见 `ProgramFiles` 与 `PROGRAMFILES` 混用），并支持 `%VAR%` 展开。
-- **可注入 spawn + 拆出 `createToolHook`**：测试不再依赖 `#!/bin/sh` 假二进制，三大平台都能跑完整用例。
-- **doctor 跨平台**：Windows 用 `Win32_Process` 列宿主、`tasklist` 判存活；状态文件改为「pid 必须存活/匹配」才算生效证据。
+没生效时它会把**原因和修复步骤**一并打出来（和启动日志里那条警告同源），所以"到底为什么没生效"不需要再猜。
 
-## 1.2.1：自检不撒谎
+实现上走 DSH 的 `ctx.commands.register()`，`commands` 服务按可选依赖注入：没组合该服务的 profile 里插件照常工作、只是没有这条命令。
 
-- `npm run doctor` 用 pid 交叉核对状态文件：只有状态文件的 pid 出现在运行中的宿主进程里，才算"本次运行确实加载了插件"；陈旧记录会明确标为「来自上一次运行或手动执行插件」，不再被当成生效证据。
-- 排障表补充对应条目。
+## 更新记录
 
-## 1.2.0：安装即生效
-
-1.1.0 用 `tools/execute` 钩子替换了"改宿主源码"的老做法，但**装好之后是否真的生效，插件一个字都不说**：只要 DSH 服务进程的环境里没有 `RTK_BIN`，插件就安静地什么都不做。1.2.0 修掉这一整类问题：
-
-- **零配置自动发现**：不再强制要求 `RTK_BIN`。未显式配置时，插件按当前平台的固定候选列表查找 RTK（macOS/Linux 见上表，Windows 见 1.3.0 说明），且仍不搜索 `PATH`。
-- **每个候选都要过可信校验**：解析真实路径后必须是常规文件、可执行，且 `--version` 必须返回 `rtk <版本>`；POSIX 下另外要求非 world-writable、属主为 root 或当前用户、所在目录不可被他人写。任何一条不满足就跳过并记录原因。
-- **不再静默失败**：解析成功会在启动时打一行 `[dsh-rtk] 已生效 — rtk x.y.z @ /path（来源：…）`；解析失败或运行中出错会打**带修复步骤的警告**，而不是无声地当个摆设。RTK 明确"没有等价命令"（退出码 1、无输出）属正常路径，不报警。
-- **不再静默替换**：显式配置的 `bin` / `RTK_BIN` 具有最高优先级；如果它不可用，插件会报错并停止改写，而不会偷偷换成另一个二进制。
-- **状态文件 + 自检命令**：插件把解析结果与改写计数写入 `$DSH_HOME/dsh-rtk/status.json`，`npm run doctor` 一次性核对"二进制、安装位置、运行中的宿主进程"。
+| 版本 | 要点 |
+| --- | --- |
+| [v1.3.2](docs/releases/v1.3.2.md) | [Windows 使用说明](docs/windows.md)（随包发布） |
+| [v1.3.1](docs/releases/v1.3.1.md) | 升级未重启时不再谎报"已生效"（`doctor` 核对运行版本） |
+| [v1.3.0](docs/releases/v1.3.0.md) | 多平台：Windows 上 DSH 用的是 `pwsh` 而非 `bash`，此前完全不触发 |
+| [v1.2.1](docs/releases/v1.2.1.md) | `doctor` 用 pid 交叉核对状态文件，不再把陈旧记录当证据 |
+| [v1.2.0](docs/releases/v1.2.0.md) | 安装即生效：零配置自动发现、不再静默失败、状态文件 + `doctor` |
+| [v1.1.0](https://github.com/robbin810130/dsh-rtk/releases/tag/v1.1.0) | 改用 `tools/execute` 钩子，不再修改宿主源码 |
 
 ## 安装
 
@@ -72,28 +74,18 @@ where.exe rtk
 **2. 装插件到正在使用的 profile**（桌面版通常是 `desktop`）：
 
 ```bash
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.3.2
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.4.0
 ```
 
 本地安装包同理：
 
 ```bash
-dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.3.2.tgz
+dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.4.0.tgz
 ```
 
 **3. 完全退出并重新打开 DSH**（macOS `Cmd+Q`，Windows 从托盘退出；只关窗口不会重新加载插件）。不要额外启动第二个 web 服务。
 
-**4. 确认生效**：
-
-```bash
-npm run doctor            # 仓库内自检：二进制 / 安装位置 / 运行中的宿主进程
-```
-
-或在 DSH 日志里找启动那一行：
-
-```
-[dsh-rtk] 已生效 — rtk 0.51.0 @ /opt/homebrew/bin/rtk（来源：discovered，profile：desktop）
-```
+**4. 确认生效**：重开后**在任意会话里打 `/rtk`**，看到「状态：已生效」即可。三种自检方式的区别见[自检与排障](#自检与排障)。
 
 RTK 装在非常规位置时，按下面任一方式指定即可（桌面版需写进 `~/.zshrc` 之类的登录 shell 配置——DSH 启动时会读取登录 shell 环境——然后完全重开 App）：
 
@@ -142,23 +134,45 @@ export RTK_BIN=/absolute/path/to/rtk        # macOS / Linux
 
 解析优先级：`config.bin` → `RTK_BIN` → 内置候选列表（`autoDiscover` 为真时）。前两者一旦设置即为唯一来源。
 
-## 验证与排障
+## 自检与排障
 
-在 Git 仓库中让 DSH 的 shell 工具执行 `git status`，应得到 RTK 的紧凑输出（对照：macOS/Linux 用 `DSH_RTK_DISABLE=1 git status`，Windows 用 `$env:DSH_RTK_DISABLE='1'; git status`，得到的是原生输出）。普通终端直接运行 `git status` 不经过 DSH 插件。
+三层自检，按"想知道什么"挑一个：
 
-`npm run doctor` 会逐项核对并给出结论；`npm run doctor -- --json` 输出机器可读结果。常见故障：
+| 想知道 | 用什么 | 说明 |
+| --- | --- | --- |
+| **现在到底生效没有** | 会话里打 `/rtk` | 最快，不用退出重开；失败时直接给出原因与修复步骤 |
+| 刚装好 rtk、不想重启 | `/rtk recheck` | 丢弃缓存重新探测，成功即刻开始改写 |
+| 装在哪、宿主进程是什么、版本对不对 | `npm run doctor` | 核对二进制 / 各 profile 安装版本 / 运行中的宿主进程；`--json` 机器可读，退出码即结论 |
+| 实际压缩效果 | `git status` 对照 | 见下 |
+
+功能对照（在 Git 仓库里执行）：
+
+```bash
+git status                                # RTK 紧凑输出 = 已生效
+```
+```bash
+DSH_RTK_DISABLE=1 git status              # macOS / Linux：原生输出 = 对照组
+```
+```powershell
+$env:DSH_RTK_DISABLE='1'; git status      # Windows
+```
+
+普通终端里直接跑 `git status` 不经过 DSH 插件，两者不要混淆。
+
+常见故障：
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| 日志出现「未生效：未找到可用的 RTK 二进制」 | 没装 RTK，或装在候选列表之外 → 安装或设置 `RTK_BIN` |
-| 日志出现「RTK_BIN 不可用」 | 显式设置指向了不存在的路径 → 改对或删掉该项 |
-| Windows 报「只接受 .exe/.com 可执行文件」 | 指到 `.cmd`/`.bat` 包装器了 → 指向真正的 `rtk.exe`（注入风险，插件不会用 shell 去跑命令文本） |
+| `/rtk` 或日志报「未找到可用的 RTK 二进制」 | 没装 RTK，或装在候选列表之外 → 安装后打 `/rtk recheck`，或用 `RTK_BIN` / `config.bin` 显式指定 |
+| 报「RTK_BIN 不可用」 | 显式设置指向了不存在的路径 → 改对或删掉该项（插件不会静默换用别的二进制） |
+| Windows 报「只接受 .exe/.com 可执行文件」 | 指到 `.cmd`/`.bat` 包装器了 → 指向真正的 `rtk.exe`（经 shell 转发命令文本有注入风险，故拒绝） |
 | `doctor` 报「宿主用的 profile 没有安装 dsh-rtk」 | 插件装到了别的 profile → 用宿主实际使用的 profile 重装 |
 | 一切正常但输出仍是原生格式 | 该命令没有 RTK 等价实现（RTK 退出码 1，属正常），或它是多行脚本；另外确认 `DSH_RTK_DISABLE` 未在服务环境中为 `1` |
-| doctor 报「状态文件来自 pid X，不在当前运行中的宿主里」 | 那份记录来自上一次运行或手动执行插件，不代表本次已加载 → 重启 DSH 后重跑；确认无误也可直接删除 `$DSH_HOME/dsh-rtk/status.json` |
+| `doctor` 报「状态文件来自 pid X，不在当前运行中的宿主里」 | 那份记录来自上一次运行或手动执行插件，不代表本次已加载 → 重启 DSH 后重跑；确认无误也可直接删除 `$DSH_HOME/dsh-rtk/status.json` |
+| `doctor` 报「运行中的宿主加载的是 vX，已安装 vY」 | 升级后还没重启 → 完全退出并重开 DSH（1.3.1 起可精确识别） |
 | 只改了配置没重启 | profile 配置与环境变量都需要完全重启 DSH 才生效 |
 
-安全说明：RTK 二进制会收到命令文本，因此自动发现只探测上表那批固定路径，绝不搜索 `PATH`；POSIX 下拒绝 world-writable、非本人/非 root 属主的文件，Windows 下只接受 `.exe`/`.com` 且绝不通过 shell 转发命令文本。插件自身不发送网络请求。RTK 可能缩短输出，精确取证时请使用跳过开关。
+安全说明：RTK 二进制会收到命令文本，因此自动发现只探测固定候选路径，绝不搜索 `PATH`；POSIX 下拒绝 world-writable、非本人/非 root 属主的文件，Windows 下只接受 `.exe`/`.com` 且绝不通过 shell 转发命令文本。插件自身不发送网络请求。RTK 可能缩短输出，精确取证时请使用跳过开关。
 
 ## 升级旧版
 
@@ -166,7 +180,7 @@ export RTK_BIN=/absolute/path/to/rtk        # macOS / Linux
 
 1.0.x 曾直接修改宿主 bash 工具。升级到 1.1.0+ **不会自动还原这些修改**。若继续使用同一份旧宿主文件，先用对应版本的原包恢复工具文件，防止两套重写叠加。桌面版内置的原始 `app.asar` 不需要这一步。`~/.dsh/dsh-rtk/*.pristine` 是旧版残留备份，确认宿主文件干净后可以删除。
 
-从 1.1.0 升到 1.2.0 无需额外操作：配置项向后兼容，新增项都有默认值。1.2.x 升到 1.3.0 同样无需改动 —— macOS/Linux 行为不变，Windows 从"完全不触发"变为可用。
+从 1.1.0 升到 1.2.0 无需额外操作：配置项向后兼容，新增项都有默认值。1.2.x 升到 1.3.0 同样无需改动 —— macOS/Linux 行为不变，Windows 从"完全不触发"变为可用。1.4.0 只是新增 `/rtk` 命令，无配置变更。
 
 ## 卸载
 
@@ -187,8 +201,8 @@ npm pack --pack-destination artifacts
 DSH_RTK_TEST_BIN=/absolute/path/to/rtk npm test     # Windows: $env:DSH_RTK_TEST_BIN='C:\...\rtk.exe'
 ```
 
-- `test/resolve.mjs`：候选可信校验（含 Windows `.exe` 规则）、解析优先级、显式配置不回退、方言与引号、状态文件、二进制消失后的重新发现与故障上报。全部通过注入 spawn 完成，三平台可跑。
-- `test/runtime.mjs`：真实 DSH 0.2.0-rc.2 ToolRuntime，验证 `bash` 与 `pwsh` 两条路径的命令重写、冻结参数兼容、权限拒绝、退出码、禁用开关及监听释放。
+- `test/resolve.mjs`：候选可信校验（含 Windows `.exe` 规则）、解析优先级、显式配置不回退、方言与引号、状态文件、二进制消失后的重新发现与故障上报、`/rtk` 命令的三种输入。全部通过注入 spawn 完成，三平台可跑。
+- `test/runtime.mjs`：真实 DSH 0.2.0-rc.2 ToolRuntime，验证 `bash` 与 `pwsh` 两条路径的命令重写、冻结参数兼容、权限拒绝、退出码、禁用开关及监听释放；并组合**真实的** `@deepseek-ai/dsh-commands` 验证 `/rtk` 定义能通过注册表校验、且随插件卸载消失。
 - `scripts/doctor.mjs`：`npm run doctor` 的实现，可 `--json` 输出。
 - `.github/workflows/ci.yml`：ubuntu/macos/windows × Node 22/24 矩阵。
 

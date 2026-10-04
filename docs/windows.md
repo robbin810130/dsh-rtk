@@ -42,7 +42,7 @@ where.exe rtk          # 例：C:\Users\<you>\.cargo\bin\rtk.exe
 ## 2. 安装插件
 
 ```powershell
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.3.2
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.4.0
 ```
 
 ## 3. 让插件找到 RTK
@@ -87,7 +87,11 @@ setx RTK_BIN "C:\Users\<you>\.cargo\bin\rtk.exe"
 
 ## 4. 重启并验证
 
-**完全退出 DSH**（托盘图标 → 退出；只关窗口不会重新加载插件）后重新打开，然后：
+**完全退出 DSH**（托盘图标 → 退出；只关窗口不会重新加载插件）后重新打开。
+
+**最快的一步**：在任意会话里打 `/rtk`，看到「状态：已生效」即可；刚装完 rtk 又不想重启时，打 `/rtk recheck` 让它立刻重新探测。没生效时这条命令会把原因和修复步骤直接说出来。
+
+要看安装位置与宿主进程这类环境信息，再跑 `doctor`：
 
 ```powershell
 node "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-rtk\scripts\doctor.mjs"
