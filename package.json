@@ -1,6 +1,6 @@
 {
   "name": "dsh-rtk",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "DSH plugin that rewrites bash commands through the supported tools/execute hook.",
   "author": "陈晓斌 <Robbin@MacBook-Pro.local>",
   "type": "module",
@@ -13,6 +13,7 @@
   },
   "files": [
     "dsh-rtk/lib/index.js",
+    "dsh-rtk/lib/doctor.js",
     "scripts/doctor.mjs",
     "docs/windows.md",
     "cordis.patch.yml",

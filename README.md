@@ -19,20 +19,21 @@
 
 `.github/workflows/ci.yml` 在 ubuntu / macos / windows 三平台 × Node 22/24 上跑 `npm test`。
 
-## 1.4.0：会话内自检 `/rtk`
+## 1.5.0：会话内自检 `/rtk`
 
 不用退出重开、也不用翻日志，直接在会话里打一条命令：
 
-```
-/rtk              # 当前状态（默认）
-/rtk status       # 同上
-/rtk recheck      # 丢弃缓存重新探测 RTK —— 刚装好 rtk、又不想重启 DSH 时用
-```
+| 命令 | 作用 |
+| --- | --- |
+| `/rtk`、`/rtk status` | 当前状态：RTK 路径与版本、改写计数、生效配置、状态文件位置 |
+| `/rtk recheck` | 丢弃缓存重新探测 RTK —— 刚装好 rtk、又不想重启 DSH 时用 |
+| `/rtk doctor` | 完整自检：二进制、各 profile 安装版本、运行中的宿主进程、状态记录 |
+| `/rtk gain` | RTK 节省统计；可加 `summary`\|`daily`\|`weekly`\|`monthly`\|`history`\|`project`\|`json` |
 
-输出示例：
+状态输出示例：
 
 ```
-dsh-rtk 1.4.0 · darwin · 挂载 bash 工具（POSIX 引用）
+dsh-rtk 1.5.0 · darwin · 挂载 bash 工具（POSIX 引用）
 状态：已生效 —— rtk 0.51.0 @ /opt/homebrew/bin/rtk（来源：discovered）
 改写 12 次 · 无等价命令 3 次 · 未改写 0 次
 配置：autoDiscover=true bin=（未设置） timeoutMs=3000 verbose=false statusFile=true
@@ -40,14 +41,27 @@ dsh-rtk 1.4.0 · darwin · 挂载 bash 工具（POSIX 引用）
 临时跳过改写：DSH_RTK_DISABLE=1 <命令>
 ```
 
-没生效时它会把**原因和修复步骤**一并打出来（和启动日志里那条警告同源），所以"到底为什么没生效"不需要再猜。
+```
+$ /rtk gain
+rtk 0.51.0 @ /opt/homebrew/bin/rtk
+RTK Token Savings (Global Scope)
+Total commands:    36030
+Tokens saved:      884.8M (91.1%)
+...
+```
 
-实现上走 DSH 的 `ctx.commands.register()`，`commands` 服务按可选依赖注入：没组合该服务的 profile 里插件照常工作、只是没有这条命令。
+三点设计约定：
+
+- **没生效时给原因和修复步骤**，与启动日志里那条警告同源——"到底为什么没生效"不用再猜。
+- **`/rtk doctor` 与 `npm run doctor` 共用同一个 `runDoctor()`**，不存在两套结论漂移的可能；区别只是它用插件自己进程内的解析结果，并把来源标成「插件进程内解析」。
+- **`/rtk gain` 不转发用户文本**：上表那几种形式映射到固定参数，避免误触 `rtk gain --reset` 这类会清空统计的开关；输出超过 40 行会截断并提示去终端跑完整版。
+- `commands` 服务按**可选依赖**注入（`ctx.inject(['commands'], …)`），没组合该服务的 profile 里插件行为不变。
 
 ## 更新记录
 
 | 版本 | 要点 |
 | --- | --- |
+| [v1.4.0](docs/releases/v1.4.0.md) | 会话内自检 `/rtk`（status / recheck） |
 | [v1.3.2](docs/releases/v1.3.2.md) | [Windows 使用说明](docs/windows.md)（随包发布） |
 | [v1.3.1](docs/releases/v1.3.1.md) | 升级未重启时不再谎报"已生效"（`doctor` 核对运行版本） |
 | [v1.3.0](docs/releases/v1.3.0.md) | 多平台：Windows 上 DSH 用的是 `pwsh` 而非 `bash`，此前完全不触发 |
@@ -74,13 +88,13 @@ where.exe rtk
 **2. 装插件到正在使用的 profile**（桌面版通常是 `desktop`）：
 
 ```bash
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.4.0
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.5.0
 ```
 
 本地安装包同理：
 
 ```bash
-dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.4.0.tgz
+dsh plugin --profile desktop add /absolute/path/dsh-rtk-1.5.0.tgz
 ```
 
 **3. 完全退出并重新打开 DSH**（macOS `Cmd+Q`，Windows 从托盘退出；只关窗口不会重新加载插件）。不要额外启动第二个 web 服务。
@@ -142,7 +156,8 @@ export RTK_BIN=/absolute/path/to/rtk        # macOS / Linux
 | --- | --- | --- |
 | **现在到底生效没有** | 会话里打 `/rtk` | 最快，不用退出重开；失败时直接给出原因与修复步骤 |
 | 刚装好 rtk、不想重启 | `/rtk recheck` | 丢弃缓存重新探测，成功即刻开始改写 |
-| 装在哪、宿主进程是什么、版本对不对 | `npm run doctor` | 核对二进制 / 各 profile 安装版本 / 运行中的宿主进程；`--json` 机器可读，退出码即结论 |
+| 装在哪、宿主进程是什么、版本对不对 | `/rtk doctor` 或 `npm run doctor` | 两者同一份代码；CLI 版 `--json` 机器可读、退出码即结论 |
+| 实际省了多少 token | `/rtk gain` | RTK 的全局节省统计，可切 daily/weekly/monthly 等 |
 | 实际压缩效果 | `git status` 对照 | 见下 |
 
 功能对照（在 Git 仓库里执行）：
@@ -201,9 +216,10 @@ npm pack --pack-destination artifacts
 DSH_RTK_TEST_BIN=/absolute/path/to/rtk npm test     # Windows: $env:DSH_RTK_TEST_BIN='C:\...\rtk.exe'
 ```
 
-- `test/resolve.mjs`：候选可信校验（含 Windows `.exe` 规则）、解析优先级、显式配置不回退、方言与引号、状态文件、二进制消失后的重新发现与故障上报、`/rtk` 命令的三种输入。全部通过注入 spawn 完成，三平台可跑。
+- `test/resolve.mjs`：候选可信校验（含 Windows `.exe` 规则）、解析优先级、显式配置不回退、方言与引号、状态文件、二进制消失后的重新发现与故障上报、`/rtk` 的四种输入与 `gain` 白名单拒绝。全部通过注入 spawn 完成，三平台可跑。
 - `test/runtime.mjs`：真实 DSH 0.2.0-rc.2 ToolRuntime，验证 `bash` 与 `pwsh` 两条路径的命令重写、冻结参数兼容、权限拒绝、退出码、禁用开关及监听释放；并组合**真实的** `@deepseek-ai/dsh-commands` 验证 `/rtk` 定义能通过注册表校验、且随插件卸载消失。
-- `scripts/doctor.mjs`：`npm run doctor` 的实现，可 `--json` 输出。
+- `dsh-rtk/lib/doctor.js`：自检报告的唯一实现（`runDoctor()`），进程探测、profile 扫描、状态记录核对都在这里；输出与判定逻辑可注入，测试无需触碰真实环境。
+- `scripts/doctor.mjs`：上面那份报告的薄 CLI，`npm run doctor`，可 `--json` 输出。
 - `.github/workflows/ci.yml`：ubuntu/macos/windows × Node 22/24 矩阵。
 
 `patch-rtk.mjs` 和 `restart-dsh.sh` 是旧版救援工具，保留用于旧宿主恢复；**不用于新版桌面 DSH 安装或重启**。

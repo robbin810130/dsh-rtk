@@ -60,6 +60,8 @@ const PLUGIN_VERSION = (() => {
   }
 })();
 
+export { PLUGIN_VERSION };
+
 export const Config = z.object({
   /** Master switch; `false` keeps the plugin installed but inert. */
   enabled: z.boolean().default(true),
@@ -89,7 +91,30 @@ const ACCEPTED_STATUS = [0, 3];
 const NO_SUGGESTION_STATUS = 1;
 /** Human `/rtk` self-check command, shown in the session without creating a model message. */
 const COMMAND_NAME = 'rtk';
-const COMMAND_USAGE = '用法：/rtk [status|recheck]\n  status  （默认）显示当前状态\n  recheck 重新探测 RTK（刚装好 rtk 又不想重启 DSH 时用）';
+const COMMAND_USAGE = [
+  '用法：/rtk [status|recheck|doctor|gain]',
+  '  status  （默认）当前状态：RTK 路径/版本、改写计数、配置',
+  '  recheck 重新探测 RTK（刚装好 rtk、又不想重启 DSH 时用）',
+  '  doctor  完整自检：二进制、各 profile 安装版本、运行中的宿主进程',
+  '  gain    RTK 节省统计；可加 summary|daily|weekly|monthly|history|project|json',
+].join('\n');
+/**
+ * Read-only `rtk gain` forms. User text is mapped onto this allowlist instead of
+ * being forwarded, so a typo can never reach a state-changing flag such as
+ * `--reset`.
+ */
+const GAIN_FORMS = {
+  '': [],
+  summary: [],
+  daily: ['-d'],
+  weekly: ['-w'],
+  monthly: ['-m'],
+  history: ['-H'],
+  project: ['-p'],
+  json: ['-f', 'json'],
+};
+/** Keep one command reply readable in the session panel. */
+const GAIN_MAX_LINES = 40;
 
 /** Shell dialects: how to quote a path, how the user opts out per command, where a command starts. */
 const DIALECTS = {
@@ -554,10 +579,50 @@ export function createRtkRuntime(options = {}) {
     return found;
   }
 
+  /**
+   * Run a read-only RTK subcommand with the resolved binary (`/rtk gain`).
+   *
+   * @param subcommand - RTK subcommand such as `gain`.
+   * @param args - argv entries appended verbatim; callers pass trusted constants.
+   * @returns `{ ok, status, stdout, stderr, bin, version, reason, hint }`.
+   */
+  function run(subcommand, args = [], runOptions = {}) {
+    const found = resolution();
+    const failed = (reason, hint) => ({ ok: false, status: null, stdout: '', stderr: '', bin: found.ok ? found.bin : null, version: null, reason, hint });
+    if (!found.ok) return failed(found.reason, found.hint);
+    let result;
+    try {
+      result = spawn(found.bin, [subcommand, ...args], {
+        encoding: 'utf8',
+        timeout: runOptions.timeoutMs ?? timeoutMs,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      return failed('rtk 无法启动', error?.message ?? String(error));
+    }
+    if (result.error) {
+      const detail = result.error.message;
+      if (['ENOENT', 'EACCES', 'EPERM'].includes(result.error.code)) invalidate(`rtk 调用失败（${result.error.code}）`, detail);
+      return failed(`rtk 调用失败（${result.error.code ?? 'unknown'}）`, detail);
+    }
+    return {
+      ok: result.status === 0,
+      status: result.status,
+      stdout: result.stdout ?? '',
+      stderr: (result.stderr ?? '').trim(),
+      bin: found.bin,
+      version: found.version,
+      reason: result.status === 0 ? null : `rtk ${subcommand} 退出码 ${result.status}`,
+      hint: null,
+    };
+  }
+
   return {
     config,
     start,
     recheck,
+    run,
     rewrite,
     resolution,
     invalidate,
@@ -612,22 +677,48 @@ export function formatStatus(runtime) {
 /**
  * Register `/rtk` when the profile composes the human-command service. The
  * service is optional, so the plugin stays silent in command-less profiles.
+ * Exported so the command surface can be tested against a chosen runtime.
  */
-function registerCommands(ctx, runtime) {
+export function registerCommands(ctx, runtime) {
   if (typeof ctx.inject !== 'function') return;
   ctx.inject(['commands'], (commandCtx) => {
     commandCtx.commands.register({
       name: COMMAND_NAME,
-      description: '查看 dsh-rtk 状态（RTK 路径/版本/改写计数），或重新探测 RTK',
-      input: { hint: '[status|recheck]' },
-      handler: (invocation) => {
+      description: '查看 dsh-rtk 状态、完整自检或 RTK 节省统计',
+      input: { hint: '[status|recheck|doctor|gain]' },
+      handler: async (invocation) => {
         const input = String(invocation?.rawInput ?? '').trim().toLowerCase();
+        if (input === '' || input === 'status') return { kind: 'success', text: formatStatus(runtime) };
         if (input === 'recheck') {
           const found = runtime.recheck();
           const header = found.ok ? '已重新探测 RTK。' : '重新探测后仍未找到可用的 RTK。';
           return { kind: found.ok ? 'success' : 'error', text: `${header}\n${formatStatus(runtime)}` };
         }
-        if (input === '' || input === 'status') return { kind: 'success', text: formatStatus(runtime) };
+        if (input === 'doctor') {
+          // Same code path as `npm run doctor`; loaded lazily so a profile that
+          // never runs it does not pay for process inspection at boot.
+          const { runDoctor } = await import('./doctor.js');
+          const report = runDoctor({
+            resolution: runtime.resolution(),
+            resolutionLabel: '插件进程内解析',
+          });
+          return { kind: report.ok ? 'success' : 'error', text: report.lines.join('\n') };
+        }
+        if (input === 'gain' || input.startsWith('gain ')) {
+          const form = input.slice('gain'.length).trim();
+          if (!Object.hasOwn(GAIN_FORMS, form)) {
+            return { kind: 'error', text: `未知的 gain 形式「${form}」。\n${COMMAND_USAGE}` };
+          }
+          const result = runtime.run('gain', GAIN_FORMS[form]);
+          if (!result.ok) {
+            return { kind: 'error', text: [result.reason, result.hint].filter((line) => typeof line === 'string' && line.length > 0).join('\n') };
+          }
+          const body = result.stdout.trim().split('\n');
+          const clipped = body.length > GAIN_MAX_LINES
+            ? [...body.slice(0, GAIN_MAX_LINES), `…（已截断，共 ${body.length} 行；完整输出可在终端直接跑 rtk gain）`]
+            : body;
+          return { kind: 'success', text: [`rtk ${result.version ?? '?'} @ ${result.bin}`, ...clipped].join('\n') };
+        }
         return { kind: 'error', text: COMMAND_USAGE };
       },
     });

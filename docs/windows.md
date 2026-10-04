@@ -42,7 +42,7 @@ where.exe rtk          # 例：C:\Users\<you>\.cargo\bin\rtk.exe
 ## 2. 安装插件
 
 ```powershell
-dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.4.0
+dsh plugin --profile desktop add github:robbin810130/dsh-rtk#v1.5.0
 ```
 
 ## 3. 让插件找到 RTK
@@ -89,9 +89,18 @@ setx RTK_BIN "C:\Users\<you>\.cargo\bin\rtk.exe"
 
 **完全退出 DSH**（托盘图标 → 退出；只关窗口不会重新加载插件）后重新打开。
 
-**最快的一步**：在任意会话里打 `/rtk`，看到「状态：已生效」即可；刚装完 rtk 又不想重启时，打 `/rtk recheck` 让它立刻重新探测。没生效时这条命令会把原因和修复步骤直接说出来。
+**最快的一步**：在任意会话里打 `/rtk`，看到「状态：已生效」即可。相关子命令：
 
-要看安装位置与宿主进程这类环境信息，再跑 `doctor`：
+| 命令 | 作用 |
+| --- | --- |
+| `/rtk` | 当前状态（RTK 路径/版本/计数） |
+| `/rtk recheck` | 刚装完 rtk、又不想重启 DSH 时立刻重新探测 |
+| `/rtk doctor` | 完整自检，与下面的 CLI 同一份代码 |
+| `/rtk gain` | RTK 节省统计（`/rtk gain daily` 等） |
+
+没生效时 `/rtk` 会把原因和修复步骤直接说出来，不必去翻日志。
+
+要看安装位置与宿主进程这类环境信息，再跑 `doctor`（等价于 `/rtk doctor`）：
 
 ```powershell
 node "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-rtk\scripts\doctor.mjs"

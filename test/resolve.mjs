@@ -17,6 +17,7 @@ import {
   inspectBinary,
   platformCandidates,
   probeVersion,
+  registerCommands,
   resolveRtkBin,
   rewriteWithRtk,
 } from '../dsh-rtk/lib/index.js';
@@ -42,6 +43,15 @@ function fakeSpawn(outcome = { status: 0, stdout: '', stderr: '' }) {
 }
 
 const ok3 = { status: 3, stdout: 'rtk git status\n' };
+
+/** Register `/rtk` against a chosen runtime and collect its definition. */
+function registerCommandsFor(target, runtime) {
+  registerCommands({
+    inject: (deps, callback) => {
+      if (deps.includes('commands')) callback({ commands: { register: (definition) => { target.push(definition); return () => {}; } } });
+    },
+  }, runtime);
+}
 
 try {
   delete process.env.RTK_BIN;
@@ -245,19 +255,42 @@ try {
   assert.equal(typeof definition.input?.hint, 'string', 'the registry rejects an empty or missing hint object');
   assert.equal(definition.input.hint.trim().length > 0, true);
 
-  const statusReply = definition.handler({ rawInput: '' });
+  const statusReply = await definition.handler({ rawInput: '' });
   assert.equal(statusReply.kind, 'success');
   assert.match(statusReply.text, /dsh-rtk/);
   assert.match(statusReply.text, /已生效/);
   assert.match(statusReply.text, /改写 \d+ 次/, 'status must report counters');
-  assert.equal(definition.handler({ rawInput: 'status' }).kind, 'success');
-  assert.equal(definition.handler({ rawInput: '  ' }).kind, 'success');
-  const recheckReply = definition.handler({ rawInput: 'RECHECK' });
+  assert.equal((await definition.handler({ rawInput: 'status' })).kind, 'success');
+  assert.equal((await definition.handler({ rawInput: '  ' })).kind, 'success');
+  const recheckReply = await definition.handler({ rawInput: 'RECHECK' });
   assert.equal(recheckReply.kind, 'success', 'recheck on a healthy runtime succeeds');
   assert.match(recheckReply.text, /已重新探测/);
-  const usageReply = definition.handler({ rawInput: 'nonsense' });
+  const usageReply = await definition.handler({ rawInput: 'nonsense' });
   assert.equal(usageReply.kind, 'error');
   assert.match(usageReply.text, /用法/);
+
+  // /rtk gain maps a small allowlist onto read-only rtk flags — never raw user text.
+  const gainRuntime = createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn: fakeSpawn({ status: 0, stdout: 'RTK Token Savings\nTotal commands: 42\n' }), log });
+  gainRuntime.start();
+  const gainRegistrations = [];
+  registerCommandsFor(gainRegistrations, gainRuntime);
+  const gainReply = await gainRegistrations[0].handler({ rawInput: 'gain' });
+  assert.equal(gainReply.kind, 'success', JSON.stringify(gainReply));
+  assert.match(gainReply.text, /Total commands: 42/);
+  assert.equal((await gainRegistrations[0].handler({ rawInput: 'GAIN daily' })).kind, 'success');
+  assert.equal((await gainRegistrations[0].handler({ rawInput: 'gain json' })).kind, 'success');
+  const gainBad = await gainRegistrations[0].handler({ rawInput: 'gain --reset --yes' });
+  assert.equal(gainBad.kind, 'error', 'state-changing flags must never be forwarded');
+  assert.match(gainBad.text, /未知的 gain 形式/);
+
+  // /rtk doctor reuses the CLI report; the resolution comes from this process.
+  const doctorRegistrations = [];
+  registerCommandsFor(doctorRegistrations, createRtkRuntime({ config: { statusFile: false }, env: { RTK_BIN: OK_BIN }, spawn: fakeSpawn(ok3), log }));
+  const doctorReply = await doctorRegistrations[0].handler({ rawInput: 'doctor' });
+  assert.match(doctorReply.text, /dsh-rtk doctor/);
+  assert.match(doctorReply.text, /插件进程内解析/);
+  assert.match(doctorReply.text, /\[2\] 插件安装位置/);
+  assert.equal(typeof doctorReply.kind, 'string');
 
   // A runtime with no usable RTK reports the reason instead of a bare failure.
   const brokenRegistrations = [];
@@ -266,11 +299,11 @@ try {
     on: () => {},
     inject: (_deps, callback) => callback({ commands: { register: (entry) => { brokenRegistrations.push(entry); return () => {}; } } }),
   }, { bin: join(root, 'absent', 'rtk'), autoDiscover: false });
-  const brokenReply = brokenRegistrations[0].handler({ rawInput: '' });
+  const brokenReply = await brokenRegistrations[0].handler({ rawInput: '' });
   assert.equal(brokenReply.kind, 'success', 'reporting a broken state is still a successful command');
   assert.match(brokenReply.text, /未生效/);
   assert.match(brokenReply.text, /RTK 没有找到|不可用/, 'the reply must carry the actionable reason');
-  assert.equal(brokenRegistrations[0].handler({ rawInput: 'recheck' }).kind, 'error', 'recheck that still fails is an error');
+  assert.equal((await brokenRegistrations[0].handler({ rawInput: 'recheck' })).kind, 'error', 'recheck that still fails is an error');
 
   // Profiles without the command service must stay silent instead of throwing.
   apply({ logger: console, on: () => {} }, { bin: OK_BIN });
